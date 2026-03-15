@@ -1,0 +1,24 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Reporte {
+  id             Int      @id @default(autoincrement())
+  hash           String   @unique
+  fuente         String   // 'whatsapp' | 'scraping'
+  fecha          String
+  ubicacion      String
+  ruta           String
+  tipoIncidente  String   @map("tipo_incidente")
+  descripcion    String
+  textoOriginal  String   @map("texto_original")
+  urlNoticia     String?  @map("url_noticia")
+  creadoEn       DateTime @default(now()) @map("creado_en")
+
+  @@map("reportes")
+}

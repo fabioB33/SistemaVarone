@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: varone
+      POSTGRES_PASSWORD: varone_secret
+      POSTGRES_DB: sistema_varone
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - db
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql://varone:varone_secret@db:5432/sistema_varone
+    volumes:
+      - wwebjs_auth:/app/.wwebjs_auth
+
+volumes:
+  pgdata:
+  wwebjs_auth:
