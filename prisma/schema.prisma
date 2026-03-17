@@ -15,9 +15,12 @@ model Reporte {
   ubicacion      String
   ruta           String
   tipoIncidente  String   @map("tipo_incidente")
+  gravedad       String?  // 'alta' | 'media' | 'baja'
   descripcion    String
   textoOriginal  String   @map("texto_original")
   urlNoticia     String?  @map("url_noticia")
+  victimas       String?  // descripción de víctimas/heridos
+  detenidos      String?  // cantidad o descripción de detenidos
   creadoEn       DateTime @default(now()) @map("creado_en")
 
   @@map("reportes")

@@ -4,6 +4,7 @@ import { PORTALES } from '../config/portales';
 import { ENV } from '../config/env';
 import { NoticiaCruda, PortalConfig } from '../types';
 import { procesarTexto } from '../services/pipeline';
+import { setScrapingStatus } from '../dashboard/server';
 
 let browser: Browser | null = null;
 
@@ -102,6 +103,7 @@ async function enriquecerNoticia(noticia: NoticiaCruda, portal: PortalConfig): P
 
 async function ejecutarScraping(): Promise<void> {
   console.log('[Scraper] Iniciando ronda de scraping...');
+  setScrapingStatus('running');
 
   for (const portal of PORTALES) {
     console.log(`[Scraper] Scrapeando: ${portal.nombre}`);
@@ -118,6 +120,7 @@ async function ejecutarScraping(): Promise<void> {
   }
 
   console.log('[Scraper] Ronda de scraping finalizada.');
+  setScrapingStatus('idle');
 }
 
 export function iniciarScraper(): void {

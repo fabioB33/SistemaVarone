@@ -7,7 +7,7 @@ import { RespuestaIA } from '../types';
 // Gemini
 function getGemini() {
   const genAI = new GoogleGenerativeAI(ENV.GEMINI_API_KEY);
-  return genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  return genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 }
 
 // OpenAI
@@ -20,25 +20,35 @@ export async function analizarConIA(texto: string): Promise<RespuestaIA> {
 
   let respuestaRaw: string;
 
-  if (ENV.AI_PROVIDER === 'gemini') {
-    const model = getGemini();
-    const result = await model.generateContent(prompt);
-    respuestaRaw = result.response.text();
-  } else {
-    const openai = getOpenAI();
-    const result = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: texto },
-      ],
-      response_format: { type: 'json_object' },
-    });
-    respuestaRaw = result.choices[0]?.message?.content || '{}';
+  try {
+    if (ENV.AI_PROVIDER === 'gemini') {
+      const model = getGemini();
+      const result = await model.generateContent(prompt);
+      respuestaRaw = result.response.text();
+    } else {
+      const openai = getOpenAI();
+      const result = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: texto },
+        ],
+        response_format: { type: 'json_object' },
+      });
+      respuestaRaw = result.choices[0]?.message?.content || '{}';
+    }
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[IA] Error en llamada a ${ENV.AI_PROVIDER}:`, errorMsg);
+    throw error; // Propagar el error en vez de fallar silenciosamente
   }
 
   // Limpiar markdown si la IA envuelve en ```json
   respuestaRaw = respuestaRaw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+  if (ENV.LOG_LEVEL === 'debug') {
+    console.log('[IA] Respuesta raw:', respuestaRaw.substring(0, 300));
+  }
 
   try {
     const parsed: RespuestaIA = JSON.parse(respuestaRaw);

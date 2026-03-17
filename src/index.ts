@@ -1,6 +1,7 @@
 import { ENV } from './config/env';
 import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
 import { iniciarScraper, detenerScraper } from './agents/scraper';
+import { startDashboard } from './dashboard/server';
 
 console.log('===========================================');
 console.log('  Sistema Varone - Monitor de Seguridad Vial');
@@ -10,6 +11,9 @@ console.log(`  IA: ${ENV.AI_PROVIDER}`);
 console.log(`  Grupo WA: ${ENV.WA_GROUP_NAME || '(no configurado)'}`);
 console.log(`  Scraping cada: ${ENV.SCRAPING_INTERVAL_MINUTES} minutos`);
 console.log('===========================================\n');
+
+// Iniciar dashboard web
+startDashboard(3000);
 
 // Iniciar agentes
 iniciarWhatsApp();

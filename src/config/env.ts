@@ -19,6 +19,10 @@ export const ENV = {
   // Scraping
   SCRAPING_INTERVAL_MINUTES: parseInt(process.env.SCRAPING_INTERVAL_MINUTES || '120', 10),
 
+  // Dashboard
+  DASHBOARD_USER: process.env.DASHBOARD_USER || 'varone',
+  DASHBOARD_PASS: process.env.DASHBOARD_PASS || 'varone2026',
+
   // General
   NODE_ENV: process.env.NODE_ENV || 'development',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',

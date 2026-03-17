@@ -3,6 +3,7 @@ import qrcode from 'qrcode-terminal';
 import { MensajeWhatsApp } from '../types';
 import { ENV } from '../config/env';
 import { procesarTexto } from '../services/pipeline';
+import { setQrData, setWaConnected, setWaDisconnected } from '../dashboard/server';
 
 let client: Client;
 
@@ -18,10 +19,12 @@ export function iniciarWhatsApp(): void {
   client.on('qr', (qr) => {
     console.log('[WhatsApp] Escaneá este código QR:');
     qrcode.generate(qr, { small: true });
+    setQrData(qr);
   });
 
   client.on('ready', () => {
     console.log('[WhatsApp] Conectado y escuchando mensajes...');
+    setWaConnected();
   });
 
   client.on('message', async (msg: Message) => {
@@ -48,6 +51,7 @@ export function iniciarWhatsApp(): void {
 
   client.on('disconnected', (reason) => {
     console.warn('[WhatsApp] Desconectado:', reason);
+    setWaDisconnected();
     console.log('[WhatsApp] Intentando reconexión en 10 segundos...');
     setTimeout(() => client.initialize(), 10000);
   });

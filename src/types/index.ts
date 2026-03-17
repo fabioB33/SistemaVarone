@@ -5,9 +5,12 @@ export interface ReporteIncidente {
   ubicacion: string;
   ruta: string;
   tipoIncidente: string;
+  gravedad?: string;
   descripcion: string;
   vehiculo?: string;
   patente?: string;
+  victimas?: string;
+  detenidos?: string;
   fuente: 'whatsapp' | 'scraping';
   urlNoticia?: string;
   textoOriginal: string;
