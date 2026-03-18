@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import QRCode from 'qrcode';
 import { ENV } from '../config/env';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 
 const prisma = new PrismaClient();
 
@@ -150,6 +152,80 @@ export function startDashboard(port: number = 3000) {
     res.send('\uFEFF' + header + rows);
   });
 
+  // API: resumen diario generado con IA
+  let resumenCache: { texto: string; generadoEn: number } | null = null;
+  const RESUMEN_TTL = 10 * 60 * 1000; // 10 minutos de cache
+
+  app.get('/api/resumen-diario', async (_req, res) => {
+    try {
+      // Servir desde cache si es reciente
+      if (resumenCache && (Date.now() - resumenCache.generadoEn) < RESUMEN_TTL) {
+        res.json({ resumen: resumenCache.texto, cached: true });
+        return;
+      }
+
+      const hoy = new Date();
+      hoy.setHours(0, 0, 0, 0);
+      const ayer = new Date(hoy);
+      ayer.setDate(ayer.getDate() - 1);
+
+      // Buscar reportes de hoy
+      let reportes = await prisma.reporte.findMany({
+        where: { creadoEn: { gte: hoy } },
+        orderBy: { creadoEn: 'desc' },
+      });
+
+      // Si hay pocos de hoy, incluir ayer
+      let periodoLabel = 'hoy';
+      if (reportes.length < 3) {
+        reportes = await prisma.reporte.findMany({
+          where: { creadoEn: { gte: ayer } },
+          orderBy: { creadoEn: 'desc' },
+        });
+        periodoLabel = 'las últimas 24 horas';
+      }
+
+      if (reportes.length === 0) {
+        res.json({ resumen: 'No se registraron incidentes en ' + periodoLabel + '.', cached: false });
+        return;
+      }
+
+      // Preparar datos para la IA
+      const datosParaIA = reportes.map(r => ({
+        tipo: r.tipoIncidente,
+        gravedad: r.gravedad,
+        ubicacion: r.ubicacion,
+        ruta: r.ruta,
+        descripcion: r.descripcion,
+        fuente: r.fuente,
+      }));
+
+      const prompt = `Sos un analista de seguridad vial en Argentina. Generá un resumen ejecutivo BREVE (máximo 3 oraciones) de los siguientes ${reportes.length} incidentes registrados en ${periodoLabel}. Mencioná las zonas más afectadas, tipos de incidentes predominantes y nivel de gravedad general. Sé directo y profesional. No uses markdown ni viñetas, solo texto corrido.\n\nIncidentes:\n${JSON.stringify(datosParaIA)}`;
+
+      let resumenTexto: string;
+
+      if (ENV.AI_PROVIDER === 'gemini') {
+        const genAI = new GoogleGenerativeAI(ENV.GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+        const result = await model.generateContent(prompt);
+        resumenTexto = result.response.text().trim();
+      } else {
+        const openai = new OpenAI({ apiKey: ENV.OPENAI_API_KEY });
+        const result = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+        });
+        resumenTexto = result.choices[0]?.message?.content?.trim() || 'No se pudo generar el resumen.';
+      }
+
+      resumenCache = { texto: resumenTexto, generadoEn: Date.now() };
+      res.json({ resumen: resumenTexto, cached: false });
+    } catch (error) {
+      console.error('[Dashboard] Error generando resumen diario:', error);
+      res.json({ resumen: 'Error al generar resumen. Los reportes individuales están disponibles debajo.', cached: false });
+    }
+  });
+
   app.listen(port, () => {
     console.log(`[Dashboard] Disponible en http://localhost:${port}`);
   });
@@ -240,7 +316,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
           document.getElementById('login-pass').focus();
         }
       } catch(err) {
-        errEl.textContent = 'Error de conexion. Intente de nuevo.';
+        errEl.textContent = 'Error de conexión. Intente de nuevo.';
         errEl.style.display = 'block';
       }
       btn.disabled = false;
@@ -258,6 +334,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <title>Sistema Varone - Monitor en Vivo</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
 
     /* Header */
@@ -276,7 +353,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
     .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
     @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-    .card { background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; }
+    .card { background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; opacity: 0; transform: translateY(16px); animation: card-enter 0.5s ease-out forwards; transition: transform 0.25s, box-shadow 0.25s; }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px rgba(0,0,0,0.4); }
+    .card:nth-child(1) { animation-delay: 0s; }
+    .card:nth-child(2) { animation-delay: 0.07s; }
+    .card:nth-child(3) { animation-delay: 0.14s; }
+    .card:nth-child(4) { animation-delay: 0.21s; }
+    .card:nth-child(5) { animation-delay: 0.28s; }
+    @keyframes card-enter { to { opacity: 1; transform: translateY(0); } }
     .card h3 { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
     .card .value { font-size: 28px; font-weight: 700; }
     .card .value.blue { color: #3b82f6; }
@@ -292,13 +376,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .panel { background: #1e293b; border-radius: 12px; border: 1px solid #334155; overflow: hidden; }
     .panel-header { padding: 14px 20px; border-bottom: 1px solid #334155; font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
     .panel-header .filter-bar { display: flex; gap: 6px; }
-    .filter-btn { background: #334155; border: none; color: #94a3b8; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+    .filter-btn { background: #334155; border: none; color: #94a3b8; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 0.2s; }
+    .filter-btn:hover { background: #475569; color: #e2e8f0; }
     .filter-btn.active { background: #3b82f6; color: white; }
     .panel-body { padding: 0; max-height: 700px; overflow-y: auto; }
 
     /* Reportes */
-    .reporte { padding: 16px 20px; border-bottom: 1px solid #334155; transition: background 0.2s; }
-    .reporte:hover { background: #1a2744; }
+    .reporte { padding: 16px 20px; border-bottom: 1px solid #334155; transition: background 0.3s, box-shadow 0.3s, transform 0.3s; }
+    .reporte:hover { background: #1a2744; box-shadow: inset 0 0 0 1px #334155, 0 4px 16px -2px rgba(0,0,0,0.3); transform: translateY(-2px); }
     .reporte:last-child { border-bottom: none; }
     .reporte-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
     .reporte .tipo { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
@@ -314,8 +399,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .badge-gravedad-alta { background: #ef44442a; color: #f87171; }
     .badge-gravedad-media { background: #f973162a; color: #fb923c; }
     .badge-gravedad-baja { background: #3b82f62a; color: #60a5fa; }
-    .badge-nuevo { background: #ef4444; color: white; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700; animation: nuevo-pulse 1s ease-in-out 3; }
-    @keyframes nuevo-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .badge-nuevo { background: #ef4444; color: white; font-size: 9px; padding: 2px 7px; border-radius: 3px; font-weight: 700; animation: nuevo-glow 1.5s ease-in-out infinite; }
+    @keyframes nuevo-glow { 0%,100% { box-shadow: 0 0 4px #ef444480; } 50% { box-shadow: 0 0 12px #ef4444cc, 0 0 24px #ef444440; } }
     .badge-fuente { font-size: 11px; padding: 2px 6px; border-radius: 3px; }
     .badge-wa { background: #22c55e1a; color: #4ade80; }
     .badge-scraping { background: #3b82f61a; color: #60a5fa; }
@@ -329,6 +414,23 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .reporte .timestamp { font-variant-numeric: tabular-nums; }
     .reporte .url-link { font-size: 12px; color: #3b82f6; text-decoration: none; }
     .reporte .url-link:hover { text-decoration: underline; color: #60a5fa; }
+    .btn-share-wa { display: inline-flex; align-items: center; gap: 6px; background: #25D36618; border: 1px solid #25D36650; color: #25D366; padding: 5px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none; transition: all 0.3s; }
+    .btn-share-wa:hover { background: #25D36630; border-color: #25D366; color: #fff; transform: translateY(-2px); box-shadow: 0 4px 12px #25D36630; }
+    .btn-share-wa .wa-icon { font-size: 15px; }
+
+    /* Resumen diario */
+    .resumen-card { background: linear-gradient(135deg, #1e293b 0%, #1a2744 50%, #1e1b4b40 100%); border: 1px solid #3b82f650; border-radius: 12px; padding: 24px 28px; margin-bottom: 20px; position: relative; overflow: hidden; border-left: 3px solid; border-image: linear-gradient(180deg, #3b82f6, #8b5cf6) 1; opacity: 0; transform: translateY(12px); animation: card-enter 0.6s ease-out 0.4s forwards; }
+    .resumen-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899, #8b5cf6, #3b82f6); background-size: 200% 100%; animation: gradient-shift 3s linear infinite; }
+    @keyframes gradient-shift { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+    .resumen-card::after { content: ''; position: absolute; top: -50%; right: -20%; width: 200px; height: 200px; background: radial-gradient(circle, #3b82f608 0%, transparent 70%); pointer-events: none; }
+    .resumen-card .resumen-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 700; color: #60a5fa; text-transform: uppercase; letter-spacing: 0.5px; }
+    .resumen-card .resumen-header .resumen-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: #3b82f620; border-radius: 6px; font-size: 14px; animation: icon-pulse 2s ease-in-out infinite; }
+    @keyframes icon-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+    .resumen-card .resumen-text { font-size: 15px; color: #e2e8f0; line-height: 1.8; }
+    .resumen-card .resumen-meta { font-size: 11px; color: #64748b; margin-top: 12px; display: flex; align-items: center; gap: 6px; }
+    .resumen-card .resumen-meta::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; }
+    .resumen-loading { color: #64748b; font-size: 13px; animation: loading-fade 1.2s ease-in-out infinite; }
+    @keyframes loading-fade { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
 
     /* WhatsApp / QR */
     .qr-section { text-align: center; padding: 24px; }
@@ -347,7 +449,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .tipo-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .tipo-bar .label { font-size: 13px; color: #94a3b8; width: 120px; }
     .tipo-bar .bar { flex: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden; }
-    .tipo-bar .fill { height: 100%; border-radius: 4px; }
+    .tipo-bar .fill { height: 100%; border-radius: 4px; animation: bar-grow 0.8s ease-out; transform-origin: left; }
+    @keyframes bar-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
     /* Alerta sonora toggle */
     .sound-toggle { background: #334155; border: 1px solid #475569; color: #e2e8f0; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
@@ -372,6 +475,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   <div class="container">
     <div class="grid" id="stats-grid"></div>
+
+    <div id="resumen-diario-container"></div>
 
     <div class="panels">
       <div class="panel">
@@ -427,6 +532,22 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     let notifEnabled = false;
     let searchQuery = '';
     let allReportes = [];
+    let prevStats = {};
+
+    // Counter animation
+    function animateCount(el, target) {
+      const start = parseInt(el.textContent) || 0;
+      if (start === target) return;
+      const duration = 800;
+      const startTime = performance.now();
+      function step(now) {
+        const progress = Math.min((now - startTime) / duration, 1);
+        const ease = 1 - Math.pow(1 - progress, 3); // easeOutCubic
+        el.textContent = Math.round(start + (target - start) * ease);
+        if (progress < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
 
     // Reloj en vivo
     function updateClock() {
@@ -493,6 +614,21 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       renderReportes();
     }
 
+    function buildShareWA(r) {
+      const desc = r.descripcion.length > 200 ? r.descripcion.substring(0, 197) + '...' : r.descripcion;
+      const urlLine = r.urlNoticia ? String.fromCodePoint(0x1F517) + ' ' + r.urlNoticia : '';
+      const parts = [
+        String.fromCodePoint(0x1F6A8) + ' ALERTA SEGURIDAD VIAL',
+        'Tipo: ' + r.tipoIncidente + ' | Gravedad: ' + (r.gravedad || 'N/A'),
+        String.fromCodePoint(0x1F4CD) + ' ' + r.ubicacion + ' — ' + r.ruta,
+        desc,
+        urlLine,
+        '— Sistema Varone'
+      ].filter(Boolean).join(String.fromCharCode(10));
+      const encoded = encodeURIComponent(parts);
+      return '<a class="btn-share-wa" href="https://wa.me/?text=' + encoded + '" target="_blank" title="Compartir por WhatsApp"><span class="wa-icon">&#x1F4F2;</span>Compartir</a>';
+    }
+
     function onSearch() {
       searchQuery = document.getElementById('search-input').value.toLowerCase().trim();
       renderReportes();
@@ -551,7 +687,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           '<div class="ubicacion-line"><strong>' + r.ubicacion + '</strong> &#x2014; ' + r.ruta + '</div>' +
           '<div class="desc">' + r.descripcion + '</div>' +
           detailRow +
-          '<div class="meta"><span class="timestamp">' + formatTimestamp(r.creadoEn) + ' (' + timeAgo(r.creadoEn) + ')</span>' + urlLink + '</div>' +
+          '<div class="meta"><span class="timestamp">' + formatTimestamp(r.creadoEn) + ' (' + timeAgo(r.creadoEn) + ')</span><span style="display:flex;gap:8px;align-items:center">' + urlLink + buildShareWA(r) + '</span></div>' +
         '</div>';
       }).join('');
     }
@@ -566,12 +702,24 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
       const altaCount = data.porGravedad?.find(g => g.gravedad === 'alta')?.count || 0;
 
-      document.getElementById('stats-grid').innerHTML =
-        '<div class="card"><h3>Total reportes</h3><div class="value blue">' + data.total + '</div><div class="sub">desde el inicio</div></div>' +
-        '<div class="card"><h3>Hoy</h3><div class="value green">' + data.hoy + '</div><div class="sub">' + new Date().toLocaleDateString('es-AR') + '</div></div>' +
-        '<div class="card"><h3>Gravedad alta</h3><div class="value red">' + altaCount + '</div><div class="sub">requieren atencion</div></div>' +
-        '<div class="card"><h3>Via WhatsApp</h3><div class="value orange">' + (data.porFuente.find(f => f.fuente === 'whatsapp')?.count || 0) + '</div><div class="sub">tiempo real</div></div>' +
-        '<div class="card"><h3>Via scraping</h3><div class="value yellow">' + (data.porFuente.find(f => f.fuente === 'scraping')?.count || 0) + '</div><div class="sub">5 portales</div></div>';
+      const waCount = data.porFuente.find(f => f.fuente === 'whatsapp')?.count || 0;
+      const scrapCount = data.porFuente.find(f => f.fuente === 'scraping')?.count || 0;
+      const statsEl = document.getElementById('stats-grid');
+      // Crear estructura solo la primera vez
+      if (!statsEl.dataset.init) {
+        statsEl.dataset.init = '1';
+        statsEl.innerHTML =
+          '<div class="card"><h3>Total reportes</h3><div class="value blue" id="stat-total">0</div><div class="sub">desde el inicio</div></div>' +
+          '<div class="card"><h3>Hoy</h3><div class="value green" id="stat-hoy">0</div><div class="sub">' + new Date().toLocaleDateString('es-AR') + '</div></div>' +
+          '<div class="card"><h3>Gravedad alta</h3><div class="value red" id="stat-alta">0</div><div class="sub">requieren atención</div></div>' +
+          '<div class="card"><h3>Via WhatsApp</h3><div class="value orange" id="stat-wa">0</div><div class="sub">tiempo real</div></div>' +
+          '<div class="card"><h3>Via scraping</h3><div class="value yellow" id="stat-scrap">0</div><div class="sub">5 portales</div></div>';
+      }
+      animateCount(document.getElementById('stat-total'), data.total);
+      animateCount(document.getElementById('stat-hoy'), data.hoy);
+      animateCount(document.getElementById('stat-alta'), altaCount);
+      animateCount(document.getElementById('stat-wa'), waCount);
+      animateCount(document.getElementById('stat-scrap'), scrapCount);
 
       const maxCount = Math.max(...data.porTipo.map(t => t.count), 1);
       document.getElementById('tipos-chart').innerHTML = data.porTipo.map(t =>
@@ -607,7 +755,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       } else if (data.qr) {
         el.innerHTML = '<img src="' + data.qr + '" alt="QR WhatsApp"><p class="msg">Escanealo con WhatsApp</p>';
       } else {
-        el.innerHTML = '<div class="disconnected-box"><div class="icon">&#x1F4F4;</div><p style="color:#ef4444;font-size:16px;font-weight:600">Desconectado</p><p class="msg">Esperando conexion de WhatsApp...</p></div>';
+        el.innerHTML = '<div class="disconnected-box"><div class="icon">&#x1F4F4;</div><p style="color:#ef4444;font-size:16px;font-weight:600">Desconectado</p><p class="msg">Esperando conexión de WhatsApp...</p></div>';
       }
     }
 
@@ -653,12 +801,32 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       window.open('/api/exportar?' + params.toString(), '_blank');
     }
 
+    let resumenLoaded = false;
+    async function loadResumen() {
+      if (resumenLoaded) return; // Solo cargar una vez (se cachea server-side 10min)
+      const el = document.getElementById('resumen-diario-container');
+      el.innerHTML = '<div class="resumen-card"><div class="resumen-header"><span class="resumen-icon">&#x1F4CA;</span> Resumen del d&#xED;a</div><div class="resumen-loading">Generando resumen con IA...</div></div>';
+      try {
+        const res = await authFetch('/api/resumen-diario');
+        const data = await res.json();
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+        el.innerHTML = '<div class="resumen-card"><div class="resumen-header"><span class="resumen-icon">&#x1F4CA;</span> Resumen ejecutivo</div><div class="resumen-text">' + data.resumen + '</div><div class="resumen-meta">Generado a las ' + timeStr + (data.cached ? ' (cacheado)' : ' con IA') + '</div></div>';
+        resumenLoaded = true;
+      } catch(e) {
+        el.innerHTML = '';
+      }
+    }
+
     async function refresh() {
       await Promise.all([loadStats(), loadReportes(), loadQR()]);
     }
 
     refresh();
+    loadResumen();
     setInterval(refresh, 5000);
+    // Refrescar resumen cada 10 minutos
+    setInterval(() => { resumenLoaded = false; loadResumen(); }, 600000);
   </script>
 </body>
 </html>`;
