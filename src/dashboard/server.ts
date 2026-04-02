@@ -36,6 +36,32 @@ export function setScrapingStatus(status: string) {
   lastScrapingTime = new Date();
 }
 
+// Notifica desconexión de WhatsApp al log y opcionalmente a Telegram
+export async function notificarDesconexion(reason: string): Promise<void> {
+  const msg = `[ALERTA] WhatsApp desconectado: ${reason} — ${new Date().toLocaleString('es-AR')}`;
+  console.error(msg);
+
+  // Si hay webhook de Telegram configurado, enviar alerta
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+  if (telegramToken && telegramChatId) {
+    try {
+      await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: telegramChatId,
+          text: `🚨 *Sistema Varone*\nWhatsApp desconectado\nMotivo: ${reason}\nHora: ${new Date().toLocaleString('es-AR')}\n\nReconexión automática en 10 segundos.`,
+          parse_mode: 'Markdown',
+        }),
+      });
+      console.log('[Alerta] Notificación enviada a Telegram.');
+    } catch (e) {
+      console.error('[Alerta] Error enviando a Telegram:', e);
+    }
+  }
+}
+
 export function startDashboard(port: number = 3000) {
   const app = express();
 
@@ -77,10 +103,35 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: reportes
-  app.get('/api/reportes', async (_req, res) => {
+  app.get('/api/reportes', async (req, res) => {
+    const { fuente, gravedad, busqueda, desde, hasta, tipo } = req.query;
+    const where: Record<string, unknown> = {};
+
+    if (fuente && fuente !== 'todos') where.fuente = fuente;
+    if (gravedad && gravedad !== 'todos') where.gravedad = gravedad;
+    if (tipo && tipo !== 'todos') where.tipoIncidente = tipo;
+
+    // Filtro por rango de fechas
+    if (desde || hasta) {
+      where.creadoEn = {
+        ...(desde ? { gte: new Date(String(desde)) } : {}),
+        ...(hasta ? { lte: new Date(String(hasta) + 'T23:59:59') } : {}),
+      };
+    }
+
+    if (busqueda) {
+      where.OR = [
+        { ubicacion: { contains: String(busqueda), mode: 'insensitive' } },
+        { ruta: { contains: String(busqueda), mode: 'insensitive' } },
+        { descripcion: { contains: String(busqueda), mode: 'insensitive' } },
+        { tipoIncidente: { contains: String(busqueda), mode: 'insensitive' } },
+      ];
+    }
+
     const reportes = await prisma.reporte.findMany({
+      where,
       orderBy: { creadoEn: 'desc' },
-      take: 100,
+      take: 200,
     });
     res.json(reportes);
   });

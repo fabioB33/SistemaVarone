@@ -4,25 +4,20 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 function generarHash(texto: string): string {
-  // Normalizar: minúsculas, sin espacios dobles, sin saltos de línea
   const normalizado = texto.toLowerCase().replace(/\s+/g, ' ').trim();
   return crypto.createHash('sha256').update(normalizado).digest('hex');
 }
 
 export async function existeDuplicado(texto: string): Promise<boolean> {
   const hash = generarHash(texto);
-
-  const existente = await prisma.reporte.findUnique({
-    where: { hash },
-  });
-
+  const existente = await prisma.reporte.findUnique({ where: { hash } });
   return existente !== null;
 }
 
-export async function registrarReporte(texto: string, datos: Record<string, unknown>): Promise<void> {
+export async function registrarReporte(texto: string, datos: Record<string, unknown>): Promise<number> {
   const hash = generarHash(texto);
 
-  await prisma.reporte.create({
+  const reporte = await prisma.reporte.create({
     data: {
       hash,
       fuente: (datos.fuente as string) || 'desconocida',
@@ -30,11 +25,44 @@ export async function registrarReporte(texto: string, datos: Record<string, unkn
       ubicacion: (datos.ubicacion as string) || 'desconocida',
       ruta: (datos.ruta as string) || 'no especificada',
       tipoIncidente: (datos.tipoIncidente as string) || 'desconocido',
+      gravedad: (datos.gravedad as string) || null,
       descripcion: (datos.descripcion as string) || '',
       textoOriginal: texto,
       urlNoticia: (datos.urlNoticia as string) || null,
+      victimas: (datos.victimas as string) || null,
+      detenidos: (datos.detenidos as string) || null,
+      framerEnviado: false,
+      framerIntentos: 0,
     },
   });
 
   console.log(`[Dedup] Reporte registrado (hash: ${hash.substring(0, 12)}...)`);
+  return reporte.id;
+}
+
+export async function marcarFramerEnviado(id: number): Promise<void> {
+  await prisma.reporte.update({
+    where: { id },
+    data: { framerEnviado: true },
+  });
+}
+
+export async function incrementarIntentosFramer(id: number): Promise<void> {
+  await prisma.reporte.update({
+    where: { id },
+    data: { framerIntentos: { increment: 1 } },
+  });
+}
+
+// Devuelve reportes pendientes de enviar a Framer (fallidos o nunca enviados)
+// Con menos de 5 intentos para no reintentar indefinidamente
+export async function obtenerPendientesFramer() {
+  return prisma.reporte.findMany({
+    where: {
+      framerEnviado: false,
+      framerIntentos: { lt: 5 },
+    },
+    orderBy: { creadoEn: 'asc' },
+    take: 20,
+  });
 }

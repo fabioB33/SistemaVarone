@@ -21,6 +21,8 @@ model Reporte {
   urlNoticia     String?  @map("url_noticia")
   victimas       String?  // descripción de víctimas/heridos
   detenidos      String?  // cantidad o descripción de detenidos
+  framerEnviado  Boolean  @default(false) @map("framer_enviado")
+  framerIntentos Int      @default(0) @map("framer_intentos")
   creadoEn       DateTime @default(now()) @map("creado_en")
 
   @@map("reportes")

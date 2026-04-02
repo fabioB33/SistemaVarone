@@ -1,7 +1,8 @@
 import { ENV } from '../config/env';
 import { ReporteIncidente } from '../types';
+import { marcarFramerEnviado, incrementarIntentosFramer } from './dedup';
 
-export async function enviarAFramer(reporte: ReporteIncidente): Promise<boolean> {
+export async function enviarAFramer(reporte: ReporteIncidente, reporteId?: number): Promise<boolean> {
   if (!ENV.FRAMER_ENDPOINT) {
     console.warn('[Framer] Endpoint no configurado, saltando envío.');
     return false;
@@ -17,9 +18,12 @@ export async function enviarAFramer(reporte: ReporteIncidente): Promise<boolean>
         ubicacion: reporte.ubicacion,
         ruta: reporte.ruta,
         tipo_incidente: reporte.tipoIncidente,
+        gravedad: reporte.gravedad || '',
         descripcion: reporte.descripcion,
         vehiculo: reporte.vehiculo || '',
         patente: reporte.patente || '',
+        victimas: reporte.victimas || '',
+        detenidos: reporte.detenidos || '',
         fuente: reporte.fuente,
         url_noticia: reporte.urlNoticia || '',
       }),
@@ -27,13 +31,16 @@ export async function enviarAFramer(reporte: ReporteIncidente): Promise<boolean>
 
     if (!response.ok) {
       console.error(`[Framer] Error HTTP ${response.status}: ${await response.text()}`);
+      if (reporteId) await incrementarIntentosFramer(reporteId);
       return false;
     }
 
-    console.log(`[Framer] Reporte enviado exitosamente (${reporte.tipoIncidente} - ${reporte.ubicacion})`);
+    if (reporteId) await marcarFramerEnviado(reporteId);
+    console.log(`[Framer] Reporte enviado (${reporte.tipoIncidente} - ${reporte.ubicacion})`);
     return true;
   } catch (error) {
     console.error('[Framer] Error enviando reporte:', error);
+    if (reporteId) await incrementarIntentosFramer(reporteId);
     return false;
   }
 }

@@ -3,9 +3,43 @@ import qrcode from 'qrcode-terminal';
 import { MensajeWhatsApp } from '../types';
 import { ENV } from '../config/env';
 import { procesarTexto } from '../services/pipeline';
-import { setQrData, setWaConnected, setWaDisconnected } from '../dashboard/server';
+import { setQrData, setWaConnected, setWaDisconnected, notificarDesconexion } from '../dashboard/server';
 
 let client: Client;
+
+// Rastrea mensajes ya procesados del historial para no duplicar con eventos en tiempo real
+const procesadosAlReconectar = new Set<string>();
+
+async function procesarHistorialGrupo(): Promise<void> {
+  try {
+    const chats = await client.getChats();
+    const grupo = chats.find(c => c.isGroup && c.name === ENV.WA_GROUP_NAME);
+
+    if (!grupo) {
+      console.warn(`[WhatsApp] Grupo "${ENV.WA_GROUP_NAME}" no encontrado al reconectar.`);
+      return;
+    }
+
+    console.log(`[WhatsApp] Procesando historial del grupo "${grupo.name}"...`);
+    const mensajes = await grupo.fetchMessages({ limit: 50 });
+
+    let procesados = 0;
+    for (const msg of mensajes.reverse()) {
+      // Solo mensajes de las últimas 2 horas para no procesar cosas viejas
+      const hace2hs = Date.now() / 1000 - 2 * 60 * 60;
+      if (msg.timestamp < hace2hs) continue;
+      if (!msg.body || msg.body.trim().length < 15) continue;
+
+      procesadosAlReconectar.add(msg.id.id);
+      await procesarTexto(msg.body, 'whatsapp');
+      procesados++;
+    }
+
+    console.log(`[WhatsApp] Historial procesado: ${procesados} mensajes recientes analizados.`);
+  } catch (error) {
+    console.error('[WhatsApp] Error procesando historial:', error);
+  }
+}
 
 export function iniciarWhatsApp(): void {
   client = new Client({
@@ -22,17 +56,24 @@ export function iniciarWhatsApp(): void {
     setQrData(qr);
   });
 
-  client.on('ready', () => {
+  client.on('ready', async () => {
     console.log('[WhatsApp] Conectado y escuchando mensajes...');
     setWaConnected();
+    // Procesar mensajes recientes perdidos durante la desconexión
+    await procesarHistorialGrupo();
   });
 
   client.on('message', async (msg: Message) => {
     try {
       const chat = await msg.getChat();
 
-      // Solo procesar mensajes del grupo configurado
       if (!chat.isGroup || chat.name !== ENV.WA_GROUP_NAME) return;
+
+      // Evitar reprocesar mensajes que ya se leyeron en el historial
+      if (procesadosAlReconectar.has(msg.id.id)) {
+        procesadosAlReconectar.delete(msg.id.id);
+        return;
+      }
 
       const mensaje: MensajeWhatsApp = {
         id: msg.id.id,
@@ -49,9 +90,13 @@ export function iniciarWhatsApp(): void {
     }
   });
 
-  client.on('disconnected', (reason) => {
+  client.on('disconnected', async (reason) => {
     console.warn('[WhatsApp] Desconectado:', reason);
     setWaDisconnected();
+
+    // Notificar la desconexión (Telegram / log / alerta)
+    await notificarDesconexion(reason);
+
     console.log('[WhatsApp] Intentando reconexión en 10 segundos...');
     setTimeout(() => client.initialize(), 10000);
   });

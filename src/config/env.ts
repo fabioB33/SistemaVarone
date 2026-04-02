@@ -23,6 +23,10 @@ export const ENV = {
   DASHBOARD_USER: process.env.DASHBOARD_USER || 'varone',
   DASHBOARD_PASS: process.env.DASHBOARD_PASS || 'varone2026',
 
+  // Alertas Telegram (opcional — si no se configura, solo logea)
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
+  TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '',
+
   // General
   NODE_ENV: process.env.NODE_ENV || 'development',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',

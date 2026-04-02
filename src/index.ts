@@ -1,7 +1,9 @@
+import cron from 'node-cron';
 import { ENV } from './config/env';
 import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
 import { iniciarScraper, detenerScraper } from './agents/scraper';
 import { startDashboard } from './dashboard/server';
+import { reintentarFramerPendientes } from './services/pipeline';
 
 console.log('===========================================');
 console.log('  Sistema Varone - Monitor de Seguridad Vial');
@@ -18,6 +20,11 @@ startDashboard(3000);
 // Iniciar agentes
 iniciarWhatsApp();
 iniciarScraper();
+
+// Cron: reintentar reportes pendientes de Framer cada 15 minutos
+cron.schedule('*/15 * * * *', async () => {
+  await reintentarFramerPendientes();
+});
 
 // Graceful shutdown
 async function shutdown(signal: string) {

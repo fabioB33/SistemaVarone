@@ -1,6 +1,7 @@
 import { analizarConIA } from './ia';
-import { existeDuplicado, registrarReporte } from './dedup';
+import { existeDuplicado, registrarReporte, obtenerPendientesFramer } from './dedup';
 import { enviarAFramer } from './framer';
+import { ReporteIncidente } from '../types';
 
 /**
  * Pipeline principal:
@@ -14,15 +15,13 @@ export async function procesarTexto(
   fuente: 'whatsapp' | 'scraping',
   urlNoticia?: string
 ): Promise<void> {
-  // Ignorar mensajes muy cortos
   if (texto.trim().length < 15) return;
 
   try {
-    // Paso 1: Análisis con IA
     const resultado = await analizarConIA(texto);
 
     if (!resultado.esRelevante || !resultado.reporte) {
-      console.log(`[Pipeline] Texto descartado (no relevante) - fuente: ${fuente}`);
+      console.log(`[Pipeline] Descartado (no relevante) - fuente: ${fuente}`);
       return;
     }
 
@@ -31,21 +30,48 @@ export async function procesarTexto(
     reporte.textoOriginal = texto;
     if (urlNoticia) reporte.urlNoticia = urlNoticia;
 
-    // Paso 2: Verificar duplicados
     const esDuplicado = await existeDuplicado(texto);
     if (esDuplicado) {
-      console.log(`[Pipeline] Duplicado detectado, ignorando.`);
+      console.log('[Pipeline] Duplicado detectado, ignorando.');
       return;
     }
 
-    // Paso 3: Registrar en DB
-    await registrarReporte(texto, reporte as unknown as Record<string, unknown>);
+    // Registrar en DB — obtener el id para trackear estado de Framer
+    const reporteId = await registrarReporte(texto, reporte as unknown as Record<string, unknown>);
 
-    // Paso 4: Enviar a Framer
-    await enviarAFramer(reporte);
+    // Enviar a Framer pasando el id para actualizar el flag
+    await enviarAFramer(reporte, reporteId);
 
     console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente})`);
   } catch (error) {
     console.error(`[Pipeline] Error procesando texto (${fuente}):`, error);
+  }
+}
+
+/**
+ * Reintenta enviar a Framer los reportes que fallaron.
+ * Se ejecuta periódicamente desde el cron.
+ */
+export async function reintentarFramerPendientes(): Promise<void> {
+  const pendientes = await obtenerPendientesFramer();
+  if (pendientes.length === 0) return;
+
+  console.log(`[Pipeline] Reintentando ${pendientes.length} reportes pendientes de Framer...`);
+
+  for (const r of pendientes) {
+    const reporte: Partial<ReporteIncidente> = {
+      fecha: r.fecha,
+      hora: 'desconocida',
+      ubicacion: r.ubicacion,
+      ruta: r.ruta,
+      tipoIncidente: r.tipoIncidente,
+      gravedad: r.gravedad ?? undefined,
+      descripcion: r.descripcion,
+      fuente: r.fuente as 'whatsapp' | 'scraping',
+      urlNoticia: r.urlNoticia ?? undefined,
+      victimas: r.victimas ?? undefined,
+      detenidos: r.detenidos ?? undefined,
+    };
+    await enviarAFramer(reporte as ReporteIncidente, r.id);
   }
 }
