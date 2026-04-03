@@ -4,6 +4,17 @@ import { enviarAFramer } from './framer';
 import { incrementarMetrica } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
 
+const PIPELINE_TIMEOUT_MS = 30_000;
+
+function conTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout (${ms}ms): ${label}`)), ms)
+    ),
+  ]);
+}
+
 /**
  * Pipeline principal:
  * 1. Recibe texto crudo (de WA o scraper)
@@ -29,7 +40,7 @@ export async function procesarTexto(
       return;
     }
 
-    const resultado = await analizarConIA(texto);
+    const resultado = await conTimeout(analizarConIA(texto), PIPELINE_TIMEOUT_MS, 'analizarConIA');
 
     if (!resultado.esRelevante || !resultado.reporte) {
       incrementarMetrica('noRelevantesDescartados');

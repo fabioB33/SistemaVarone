@@ -7,6 +7,7 @@ import { procesarTexto } from '../services/pipeline';
 import { setScrapingStatus } from '../dashboard/server';
 
 let browser: Browser | null = null;
+let scraperCorriendo = false;
 
 function resolverUrl(href: string, baseUrl?: string): string {
   if (href.startsWith('http')) return href;
@@ -102,31 +103,42 @@ async function enriquecerNoticia(noticia: NoticiaCruda, portal: PortalConfig): P
 }
 
 async function ejecutarScraping(): Promise<void> {
-  console.log('[Scraper] Iniciando ronda de scraping...');
+  if (scraperCorriendo) {
+    console.warn('[Scraper] Ya hay un ciclo en ejecución, saltando.');
+    return;
+  }
+
+  scraperCorriendo = true;
   setScrapingStatus('running');
+  console.log('[Scraper] Iniciando ronda de scraping...');
 
-  for (const portal of PORTALES) {
-    console.log(`[Scraper] Scrapeando: ${portal.nombre}`);
+  try {
+    for (const portal of PORTALES) {
+      console.log(`[Scraper] Scrapeando: ${portal.nombre}`);
 
-    const noticias = await scrapearPortal(portal);
-    console.log(`[Scraper] ${noticias.length} noticias encontradas en ${portal.nombre}`);
+      const noticias = await scrapearPortal(portal);
+      console.log(`[Scraper] ${noticias.length} noticias encontradas en ${portal.nombre}`);
 
-    for (const noticia of noticias) {
-      const enriquecida = await enriquecerNoticia(noticia, portal);
-      const textoCompleto = `${enriquecida.titulo}\n${enriquecida.contenido}`;
+      for (const noticia of noticias) {
+        const enriquecida = await enriquecerNoticia(noticia, portal);
+        const textoCompleto = `${enriquecida.titulo}\n${enriquecida.contenido}`;
 
-      await procesarTexto(textoCompleto, 'scraping', enriquecida.url);
+        await procesarTexto(textoCompleto, 'scraping', enriquecida.url);
+      }
     }
-  }
 
-  // Cerrar browser al finalizar cada ciclo para liberar memoria
-  if (browser) {
-    await browser.close();
-    browser = null;
+    console.log('[Scraper] Ronda de scraping finalizada.');
+  } catch (error) {
+    console.error('[Scraper] Error inesperado en ciclo:', error);
+  } finally {
+    // Siempre cerrar browser y liberar el flag, incluso si hubo error
+    if (browser) {
+      await browser.close();
+      browser = null;
+    }
+    scraperCorriendo = false;
+    setScrapingStatus('idle');
   }
-
-  console.log('[Scraper] Ronda de scraping finalizada.');
-  setScrapingStatus('idle');
 }
 
 export function iniciarScraper(): void {
