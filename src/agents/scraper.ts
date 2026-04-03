@@ -119,6 +119,12 @@ async function ejecutarScraping(): Promise<void> {
     }
   }
 
+  // Cerrar browser al finalizar cada ciclo para liberar memoria
+  if (browser) {
+    await browser.close();
+    browser = null;
+  }
+
   console.log('[Scraper] Ronda de scraping finalizada.');
   setScrapingStatus('idle');
 }

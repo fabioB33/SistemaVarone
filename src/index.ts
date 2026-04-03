@@ -5,6 +5,23 @@ import { iniciarScraper, detenerScraper } from './agents/scraper';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
 
+// Validar variables de entorno críticas antes de arrancar
+const erroresEnv: string[] = [];
+if (ENV.AI_PROVIDER === 'gemini' && !ENV.GEMINI_API_KEY) {
+  erroresEnv.push('GEMINI_API_KEY requerida cuando AI_PROVIDER=gemini');
+}
+if (ENV.AI_PROVIDER === 'openai' && !ENV.OPENAI_API_KEY) {
+  erroresEnv.push('OPENAI_API_KEY requerida cuando AI_PROVIDER=openai');
+}
+if (!ENV.DATABASE_URL) {
+  erroresEnv.push('DATABASE_URL es requerida');
+}
+if (erroresEnv.length > 0) {
+  console.error('[Config] ERROR: Variables de entorno faltantes:');
+  erroresEnv.forEach(e => console.error('  -', e));
+  process.exit(1);
+}
+
 console.log('===========================================');
 console.log('  Sistema Varone - Monitor de Seguridad Vial');
 console.log('===========================================');

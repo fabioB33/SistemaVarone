@@ -95,7 +95,7 @@ export function startDashboard(port: number = 3000) {
     const token = req.headers.authorization?.replace('Bearer ', '') ||
                   req.query.token as string;
     if (token && activeSessions.has(token)) {
-      const expires = activeSessions.get(token)!;
+      const expires = activeSessions.get(token) ?? 0;
       if (Date.now() < expires) return next();
       activeSessions.delete(token);
     }
@@ -205,6 +205,7 @@ export function startDashboard(port: number = 3000) {
 
   // API: resumen diario generado con IA
   let resumenCache: { texto: string; generadoEn: number } | null = null;
+  let resumenEnProgreso = false;
   const RESUMEN_TTL = 10 * 60 * 1000; // 10 minutos de cache
 
   app.get('/api/resumen-diario', async (_req, res) => {
@@ -214,6 +215,13 @@ export function startDashboard(port: number = 3000) {
         res.json({ resumen: resumenCache.texto, cached: true });
         return;
       }
+
+      // Evitar llamadas concurrentes a la IA
+      if (resumenEnProgreso) {
+        res.json({ resumen: 'Generando resumen, intentá en unos segundos.', cached: false });
+        return;
+      }
+      resumenEnProgreso = true;
 
       const hoy = new Date();
       hoy.setHours(0, 0, 0, 0);
@@ -270,8 +278,10 @@ export function startDashboard(port: number = 3000) {
       }
 
       resumenCache = { texto: resumenTexto, generadoEn: Date.now() };
+      resumenEnProgreso = false;
       res.json({ resumen: resumenTexto, cached: false });
     } catch (error) {
+      resumenEnProgreso = false;
       console.error('[Dashboard] Error generando resumen diario:', error);
       res.json({ resumen: 'Error al generar resumen. Los reportes individuales están disponibles debajo.', cached: false });
     }

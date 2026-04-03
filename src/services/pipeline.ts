@@ -6,9 +6,9 @@ import { ReporteIncidente } from '../types';
 /**
  * Pipeline principal:
  * 1. Recibe texto crudo (de WA o scraper)
- * 2. Lo envía a la IA para clasificar y estructurar
- * 3. Verifica duplicados en PostgreSQL
- * 4. Si es nuevo, lo registra y lo envía a Framer
+ * 2. Verifica duplicados en PostgreSQL (antes de llamar a la IA para ahorrar API quota)
+ * 3. Lo envía a la IA para clasificar y estructurar
+ * 4. Si es nuevo y relevante, lo registra y lo envía a Framer
  */
 export async function procesarTexto(
   texto: string,
@@ -18,6 +18,13 @@ export async function procesarTexto(
   if (texto.trim().length < 15) return;
 
   try {
+    // Verificar duplicado antes de llamar a la IA para ahorrar quota de API
+    const esDuplicado = await existeDuplicado(texto);
+    if (esDuplicado) {
+      console.log('[Pipeline] Duplicado detectado, ignorando.');
+      return;
+    }
+
     const resultado = await analizarConIA(texto);
 
     if (!resultado.esRelevante || !resultado.reporte) {
@@ -30,14 +37,9 @@ export async function procesarTexto(
     reporte.textoOriginal = texto;
     if (urlNoticia) reporte.urlNoticia = urlNoticia;
 
-    const esDuplicado = await existeDuplicado(texto);
-    if (esDuplicado) {
-      console.log('[Pipeline] Duplicado detectado, ignorando.');
-      return;
-    }
-
     // Registrar en DB — obtener el id para trackear estado de Framer
-    const reporteId = await registrarReporte(texto, reporte as unknown as Record<string, unknown>);
+    const datosReporte: Record<string, unknown> = { ...reporte };
+    const reporteId = await registrarReporte(texto, datosReporte);
 
     // Enviar a Framer pasando el id para actualizar el flag
     await enviarAFramer(reporte, reporteId);
