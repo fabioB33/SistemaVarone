@@ -33,6 +33,7 @@ export async function registrarReporte(texto: string, datos: Record<string, unkn
       detenidos: (datos.detenidos as string) || null,
       framerEnviado: false,
       framerIntentos: 0,
+      portalOrigen: (datos.portalOrigen as string) || null,
     },
   });
 

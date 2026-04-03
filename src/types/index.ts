@@ -13,6 +13,7 @@ export interface ReporteIncidente {
   detenidos?: string;
   fuente: 'whatsapp' | 'scraping';
   urlNoticia?: string;
+  portalOrigen?: string;
   textoOriginal: string;
 }
 

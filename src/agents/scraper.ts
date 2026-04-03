@@ -9,6 +9,36 @@ import { setScrapingStatus } from '../dashboard/server';
 let browser: Browser | null = null;
 let scraperCorriendo = false;
 
+// Circuit breaker por portal: después de 3 fallos consecutivos, saltar N ciclos
+const FALLOS_PARA_ABRIR = 3;
+const CICLOS_COOLDOWN = 5;
+const portalFallos = new Map<string, number>();    // portal → fallos consecutivos
+const portalCooldown = new Map<string, number>();  // portal → ciclos restantes de pausa
+
+function portalBloqueado(nombre: string): boolean {
+  const cooldown = portalCooldown.get(nombre) ?? 0;
+  if (cooldown > 0) {
+    portalCooldown.set(nombre, cooldown - 1);
+    console.warn(`[Scraper] Portal "${nombre}" en cooldown (${cooldown} ciclos restantes), saltando.`);
+    return true;
+  }
+  return false;
+}
+
+function registrarFalloPortal(nombre: string): void {
+  const fallos = (portalFallos.get(nombre) ?? 0) + 1;
+  portalFallos.set(nombre, fallos);
+  if (fallos >= FALLOS_PARA_ABRIR) {
+    portalCooldown.set(nombre, CICLOS_COOLDOWN);
+    portalFallos.set(nombre, 0);
+    console.error(`[Scraper] Portal "${nombre}" bloqueado por ${CICLOS_COOLDOWN} ciclos tras ${fallos} fallos consecutivos.`);
+  }
+}
+
+function registrarExitoPortal(nombre: string): void {
+  portalFallos.set(nombre, 0);
+}
+
 function resolverUrl(href: string, baseUrl?: string): string {
   if (href.startsWith('http')) return href;
   if (baseUrl) return `${baseUrl}${href.startsWith('/') ? '' : '/'}${href}`;
@@ -114,16 +144,23 @@ async function ejecutarScraping(): Promise<void> {
 
   try {
     for (const portal of PORTALES) {
+      if (portalBloqueado(portal.nombre)) continue;
+
       console.log(`[Scraper] Scrapeando: ${portal.nombre}`);
 
-      const noticias = await scrapearPortal(portal);
-      console.log(`[Scraper] ${noticias.length} noticias encontradas en ${portal.nombre}`);
+      try {
+        const noticias = await scrapearPortal(portal);
+        console.log(`[Scraper] ${noticias.length} noticias encontradas en ${portal.nombre}`);
+        registrarExitoPortal(portal.nombre);
 
-      for (const noticia of noticias) {
-        const enriquecida = await enriquecerNoticia(noticia, portal);
-        const textoCompleto = `${enriquecida.titulo}\n${enriquecida.contenido}`;
-
-        await procesarTexto(textoCompleto, 'scraping', enriquecida.url);
+        for (const noticia of noticias) {
+          const enriquecida = await enriquecerNoticia(noticia, portal);
+          const textoCompleto = `${enriquecida.titulo}\n${enriquecida.contenido}`;
+          await procesarTexto(textoCompleto, 'scraping', enriquecida.url, portal.nombre);
+        }
+      } catch (errorPortal) {
+        console.error(`[Scraper] Fallo en portal "${portal.nombre}":`, errorPortal);
+        registrarFalloPortal(portal.nombre);
       }
     }
 
@@ -139,6 +176,10 @@ async function ejecutarScraping(): Promise<void> {
     scraperCorriendo = false;
     setScrapingStatus('idle');
   }
+}
+
+export function forzarScraping(): void {
+  ejecutarScraping().catch(err => console.error('[Scraper] Error en scraping manual:', err));
 }
 
 export function iniciarScraper(): void {

@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { ENV } from './config/env';
 import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
-import { iniciarScraper, detenerScraper } from './agents/scraper';
+import { iniciarScraper, detenerScraper, forzarScraping } from './agents/scraper';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
 
@@ -39,17 +39,43 @@ console.log(`  Grupo WA: ${ENV.WA_GROUP_NAME || '(no configurado)'}`);
 console.log(`  Scraping cada: ${ENV.SCRAPING_INTERVAL_MINUTES} minutos`);
 console.log('===========================================\n');
 
-// Iniciar dashboard web
-startDashboard(3000);
+// Conectar a la DB con reintentos antes de arrancar los agentes
+async function conectarDB(intentos = 3): Promise<void> {
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  for (let i = 1; i <= intentos; i++) {
+    try {
+      await prisma.$connect();
+      await prisma.$disconnect();
+      console.log('[DB] Conexión verificada.');
+      return;
+    } catch (err) {
+      const espera = Math.pow(2, i) * 1000;
+      console.error(`[DB] Intento ${i}/${intentos} fallido. Reintentando en ${espera / 1000}s...`);
+      if (i === intentos) throw err;
+      await new Promise(r => setTimeout(r, espera));
+    }
+  }
+}
 
-// Iniciar agentes
-iniciarWhatsApp();
-iniciarScraper();
+async function main() {
+  await conectarDB().catch(err => {
+    console.error('[DB] No se pudo conectar a la base de datos:', err);
+    process.exit(1);
+  });
 
-// Cron: reintentar reportes pendientes de Framer cada 15 minutos
-cron.schedule('*/15 * * * *', async () => {
-  await reintentarFramerPendientes();
-});
+  // Iniciar dashboard web
+  startDashboard(3000, forzarScraping);
+
+  // Iniciar agentes
+  iniciarWhatsApp();
+  iniciarScraper();
+
+  // Cron: reintentar reportes pendientes de Framer cada 15 minutos
+  cron.schedule('*/15 * * * *', async () => {
+    await reintentarFramerPendientes();
+  });
+}
 
 // Graceful shutdown
 async function shutdown(signal: string) {
@@ -64,3 +90,5 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('unhandledRejection', (err) => {
   console.error('[Sistema] Unhandled rejection:', err);
 });
+
+main();

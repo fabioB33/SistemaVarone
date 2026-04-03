@@ -85,7 +85,7 @@ export async function notificarDesconexion(reason: string): Promise<void> {
   }
 }
 
-export function startDashboard(port: number = 3000) {
+export function startDashboard(port: number = 3000, onForzarScraping?: () => void) {
   const app = express();
 
   app.use(express.json());
@@ -123,6 +123,16 @@ export function startDashboard(port: number = 3000) {
       activeSessions.delete(token);
     }
     res.status(401).json({ error: 'No autorizado' });
+  });
+
+  // API: forzar scraping manual
+  app.post('/api/scraper/run', (_req, res) => {
+    if (onForzarScraping) {
+      onForzarScraping();
+      res.json({ ok: true, mensaje: 'Scraping iniciado.' });
+    } else {
+      res.status(503).json({ ok: false, error: 'Scraper no disponible.' });
+    }
   });
 
   // API: métricas del pipeline en tiempo real
@@ -241,20 +251,30 @@ export function startDashboard(port: number = 3000) {
     res.send('\uFEFF' + header + rows);
   });
 
-  // API: resumen diario generado con IA
+  // API: resumen diario generado con IA (persiste en DB para sobrevivir reinicios)
   let resumenCache: { texto: string; generadoEn: number } | null = null;
   let resumenEnProgreso = false;
-  const RESUMEN_TTL = 10 * 60 * 1000; // 10 minutos de cache
+  const RESUMEN_TTL = 10 * 60 * 1000; // 10 minutos de cache en memoria
 
   app.get('/api/resumen-diario', async (_req, res) => {
     try {
-      // Servir desde cache si es reciente
+      // 1. Servir desde cache en memoria si es reciente
       if (resumenCache && (Date.now() - resumenCache.generadoEn) < RESUMEN_TTL) {
         res.json({ resumen: resumenCache.texto, cached: true });
         return;
       }
 
-      // Evitar llamadas concurrentes a la IA
+      const fechaHoy = new Date().toISOString().split('T')[0];
+
+      // 2. Buscar en DB si ya se generó hoy (sobrevive reinicios del proceso)
+      const resumenDB = await prisma.resumenDiario.findUnique({ where: { fecha: fechaHoy } });
+      if (resumenDB) {
+        resumenCache = { texto: resumenDB.texto, generadoEn: Date.now() };
+        res.json({ resumen: resumenDB.texto, cached: true });
+        return;
+      }
+
+      // 3. Evitar llamadas concurrentes a la IA
       if (resumenEnProgreso) {
         res.json({ resumen: 'Generando resumen, intentá en unos segundos.', cached: false });
         return;
@@ -266,13 +286,11 @@ export function startDashboard(port: number = 3000) {
       const ayer = new Date(hoy);
       ayer.setDate(ayer.getDate() - 1);
 
-      // Buscar reportes de hoy
       let reportes = await prisma.reporte.findMany({
         where: { creadoEn: { gte: hoy } },
         orderBy: { creadoEn: 'desc' },
       });
 
-      // Si hay pocos de hoy, incluir ayer
       let periodoLabel = 'hoy';
       if (reportes.length < 3) {
         reportes = await prisma.reporte.findMany({
@@ -283,11 +301,11 @@ export function startDashboard(port: number = 3000) {
       }
 
       if (reportes.length === 0) {
+        resumenEnProgreso = false;
         res.json({ resumen: 'No se registraron incidentes en ' + periodoLabel + '.', cached: false });
         return;
       }
 
-      // Preparar datos para la IA
       const datosParaIA = reportes.map(r => ({
         tipo: r.tipoIncidente,
         gravedad: r.gravedad,
@@ -314,6 +332,13 @@ export function startDashboard(port: number = 3000) {
         });
         resumenTexto = result.choices[0]?.message?.content?.trim() || 'No se pudo generar el resumen.';
       }
+
+      // Persistir en DB (upsert por si ya existe de una carrera)
+      await prisma.resumenDiario.upsert({
+        where: { fecha: fechaHoy },
+        update: { texto: resumenTexto },
+        create: { fecha: fechaHoy, texto: resumenTexto },
+      });
 
       resumenCache = { texto: resumenTexto, generadoEn: Date.now() };
       resumenEnProgreso = false;

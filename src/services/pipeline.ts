@@ -25,7 +25,8 @@ function conTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<
 export async function procesarTexto(
   texto: string,
   fuente: 'whatsapp' | 'scraping',
-  urlNoticia?: string
+  urlNoticia?: string,
+  portalOrigen?: string
 ): Promise<void> {
   if (texto.trim().length < 15) return;
 
@@ -52,6 +53,7 @@ export async function procesarTexto(
     reporte.fuente = fuente;
     reporte.textoOriginal = texto;
     if (urlNoticia) reporte.urlNoticia = urlNoticia;
+    if (portalOrigen) reporte.portalOrigen = portalOrigen;
 
     // Registrar en DB — obtener el id para trackear estado de Framer
     const datosReporte: Record<string, unknown> = { ...reporte };
