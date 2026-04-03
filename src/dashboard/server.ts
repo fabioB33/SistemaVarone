@@ -10,7 +10,15 @@ const prisma = new PrismaClient();
 
 // Sesiones activas (token → timestamp de expiración)
 const activeSessions = new Map<string, number>();
-const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 horas
+const SESSION_DURATION = 4 * 60 * 60 * 1000; // 4 horas
+
+// Limpiar tokens expirados cada hora para no acumular en memoria
+setInterval(() => {
+  const ahora = Date.now();
+  for (const [token, expires] of activeSessions) {
+    if (ahora >= expires) activeSessions.delete(token);
+  }
+}, 60 * 60 * 1000);
 
 // Estado compartido del QR y WhatsApp
 let qrData: string | null = null;

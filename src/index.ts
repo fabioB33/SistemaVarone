@@ -16,6 +16,14 @@ if (ENV.AI_PROVIDER === 'openai' && !ENV.OPENAI_API_KEY) {
 if (!ENV.DATABASE_URL) {
   erroresEnv.push('DATABASE_URL es requerida');
 }
+if (ENV.NODE_ENV === 'production') {
+  if (ENV.DASHBOARD_USER === 'varone') {
+    erroresEnv.push('DASHBOARD_USER no puede ser el valor por defecto en producción');
+  }
+  if (ENV.DASHBOARD_PASS === 'varone2026') {
+    erroresEnv.push('DASHBOARD_PASS no puede ser el valor por defecto en producción');
+  }
+}
 if (erroresEnv.length > 0) {
   console.error('[Config] ERROR: Variables de entorno faltantes:');
   erroresEnv.forEach(e => console.error('  -', e));
