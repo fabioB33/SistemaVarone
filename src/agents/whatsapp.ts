@@ -10,6 +10,17 @@ let client: Client;
 // Rastrea mensajes ya procesados del historial para no duplicar con eventos en tiempo real
 const procesadosAlReconectar = new Set<string>();
 
+// Rate limit por remitente: máximo 1 mensaje cada 60 segundos por sender
+const RATE_LIMIT_MS = 60 * 1000;
+const ultimoProcesado = new Map<string, number>();
+
+function dentroDeLimite(senderId: string): boolean {
+  const ultimo = ultimoProcesado.get(senderId);
+  if (ultimo && Date.now() - ultimo < RATE_LIMIT_MS) return false;
+  ultimoProcesado.set(senderId, Date.now());
+  return true;
+}
+
 async function procesarHistorialGrupo(): Promise<void> {
   try {
     const chats = await client.getChats();
@@ -82,6 +93,11 @@ export function iniciarWhatsApp(): void {
         timestamp: msg.timestamp,
         groupName: chat.name,
       };
+
+      if (!dentroDeLimite(msg.from)) {
+        console.log(`[WhatsApp] Rate limit: ignorando mensaje de ${msg.from} (muy frecuente)`);
+        return;
+      }
 
       console.log(`[WhatsApp] Mensaje recibido en "${chat.name}": ${msg.body.substring(0, 80)}...`);
       await procesarTexto(mensaje.body, 'whatsapp');

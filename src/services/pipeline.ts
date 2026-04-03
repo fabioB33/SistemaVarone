@@ -1,6 +1,7 @@
 import { analizarConIA } from './ia';
 import { existeDuplicado, registrarReporte, obtenerPendientesFramer } from './dedup';
 import { enviarAFramer } from './framer';
+import { incrementarMetrica } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
 
 /**
@@ -18,9 +19,12 @@ export async function procesarTexto(
   if (texto.trim().length < 15) return;
 
   try {
+    incrementarMetrica('textosTotales');
+
     // Verificar duplicado antes de llamar a la IA para ahorrar quota de API
     const esDuplicado = await existeDuplicado(texto);
     if (esDuplicado) {
+      incrementarMetrica('duplicadosDescartados');
       console.log('[Pipeline] Duplicado detectado, ignorando.');
       return;
     }
@@ -28,6 +32,7 @@ export async function procesarTexto(
     const resultado = await analizarConIA(texto);
 
     if (!resultado.esRelevante || !resultado.reporte) {
+      incrementarMetrica('noRelevantesDescartados');
       console.log(`[Pipeline] Descartado (no relevante) - fuente: ${fuente}`);
       return;
     }
@@ -40,9 +45,11 @@ export async function procesarTexto(
     // Registrar en DB — obtener el id para trackear estado de Framer
     const datosReporte: Record<string, unknown> = { ...reporte };
     const reporteId = await registrarReporte(texto, datosReporte);
+    incrementarMetrica('reportesRegistrados');
 
     // Enviar a Framer pasando el id para actualizar el flag
-    await enviarAFramer(reporte, reporteId);
+    const framerOk = await enviarAFramer(reporte, reporteId);
+    incrementarMetrica(framerOk ? 'framerEnviados' : 'framerFallidos');
 
     console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente})`);
   } catch (error) {

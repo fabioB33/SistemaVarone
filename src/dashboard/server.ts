@@ -18,6 +18,21 @@ let waStatus: 'disconnected' | 'qr' | 'connected' = 'disconnected';
 let lastScrapingTime: Date | null = null;
 let scrapingStatus: string = 'Sin ejecutar';
 
+// Contadores de pipeline en memoria (se resetean al reiniciar el proceso)
+const pipelineMetrics = {
+  textosTotales: 0,
+  duplicadosDescartados: 0,
+  noRelevantesDescartados: 0,
+  reportesRegistrados: 0,
+  framerEnviados: 0,
+  framerFallidos: 0,
+  iniciadoEn: new Date(),
+};
+
+export function incrementarMetrica(metrica: keyof Omit<typeof pipelineMetrics, 'iniciadoEn'>) {
+  pipelineMetrics[metrica]++;
+}
+
 // Funciones para actualizar estado desde index.ts
 export function setQrData(qr: string) {
   qrData = qr;
@@ -100,6 +115,21 @@ export function startDashboard(port: number = 3000) {
       activeSessions.delete(token);
     }
     res.status(401).json({ error: 'No autorizado' });
+  });
+
+  // API: métricas del pipeline en tiempo real
+  app.get('/api/metrics', (_req, res) => {
+    const uptimeMs = Date.now() - pipelineMetrics.iniciadoEn.getTime();
+    const uptimeHs = Math.floor(uptimeMs / 3600000);
+    const uptimeMin = Math.floor((uptimeMs % 3600000) / 60000);
+    res.json({
+      ...pipelineMetrics,
+      iniciadoEn: pipelineMetrics.iniciadoEn.toISOString(),
+      uptime: `${uptimeHs}h ${uptimeMin}m`,
+      tasaConversion: pipelineMetrics.textosTotales > 0
+        ? `${((pipelineMetrics.reportesRegistrados / pipelineMetrics.textosTotales) * 100).toFixed(1)}%`
+        : '0%',
+    });
   });
 
   // API: reportes
