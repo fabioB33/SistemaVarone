@@ -4,6 +4,7 @@ import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
 import { iniciarScraper, detenerScraper, forzarScraping, getCircuitBreakerStatus } from './agents/scraper';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
+import { enviarHealthcheck } from './services/healthcheck';
 
 // Validar variables de entorno críticas antes de arrancar
 const erroresEnv: string[] = [];
@@ -78,6 +79,11 @@ async function main() {
   cron.schedule('*/15 * * * *', async () => {
     await reintentarFramerPendientes();
   });
+
+  // Cron: healthcheck diario a las 8:00 AM Argentina
+  cron.schedule('0 8 * * *', async () => {
+    await enviarHealthcheck();
+  }, { timezone: 'America/Argentina/Buenos_Aires' });
 }
 
 // Graceful shutdown

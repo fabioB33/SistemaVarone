@@ -5,6 +5,17 @@ import { ENV } from '../config/env';
 import { procesarTexto } from '../services/pipeline';
 import { setQrData, setWaConnected, setWaDisconnected, notificarDesconexion } from '../dashboard/server';
 
+// Reconexión con backoff exponencial
+const RECONEXION_BASE_MS = 10_000;   // 10s primer intento
+const RECONEXION_MAX_MS = 5 * 60_000; // máximo 5 minutos entre intentos
+const RECONEXION_MAX_INTENTOS = 10;   // después de 10 intentos fallidos, alerta crítica
+let intentosReconexion = 0;
+
+function calcularEsperaReconexion(): number {
+  const espera = Math.min(RECONEXION_BASE_MS * Math.pow(2, intentosReconexion), RECONEXION_MAX_MS);
+  return espera;
+}
+
 let client: Client;
 
 // Rastrea mensajes ya procesados del historial para no duplicar con eventos en tiempo real.
@@ -73,6 +84,7 @@ export function iniciarWhatsApp(): void {
 
   client.on('ready', async () => {
     console.log('[WhatsApp] Conectado y escuchando mensajes...');
+    intentosReconexion = 0; // resetear contador al conectar exitosamente
     setWaConnected();
     // Procesar mensajes recientes perdidos durante la desconexión
     await procesarHistorialGrupo();
@@ -119,12 +131,28 @@ export function iniciarWhatsApp(): void {
   client.on('disconnected', async (reason) => {
     console.warn('[WhatsApp] Desconectado:', reason);
     setWaDisconnected();
-
-    // Notificar la desconexión (Telegram / log / alerta)
     await notificarDesconexion(reason);
 
-    console.log('[WhatsApp] Intentando reconexión en 10 segundos...');
-    setTimeout(() => client.initialize(), 10000);
+    intentosReconexion++;
+    const espera = calcularEsperaReconexion();
+    console.log(`[WhatsApp] Reconexión intento ${intentosReconexion}/${RECONEXION_MAX_INTENTOS} en ${espera / 1000}s...`);
+
+    // Si superamos el máximo de intentos, enviar alerta crítica y seguir intentando cada 5min
+    if (intentosReconexion >= RECONEXION_MAX_INTENTOS) {
+      const msg = `🚨 *Sistema Varone — ALERTA CRÍTICA*\nWhatsApp no pudo reconectar después de ${RECONEXION_MAX_INTENTOS} intentos.\nÚltimo motivo: ${reason}\nIntervención manual requerida.`;
+      console.error(`[WhatsApp] ${msg}`);
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const chatId = process.env.TELEGRAM_CHAT_ID;
+      if (token && chatId) {
+        fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
+        }).catch(e => console.error('[WhatsApp] Error enviando alerta crítica:', e));
+      }
+    }
+
+    setTimeout(() => client.initialize(), espera);
   });
 
   client.on('auth_failure', (msg) => {
