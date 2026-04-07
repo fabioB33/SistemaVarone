@@ -103,6 +103,12 @@ export function iniciarWhatsApp(): void {
         return;
       }
 
+      // F4: loguear mensajes no-texto (fotos, audios, docs) para visibilidad
+      if (msg.type !== 'chat') {
+        console.log(`[WhatsApp] Mensaje no-texto ignorado (tipo: ${msg.type}) de ${msg.from}`);
+        return;
+      }
+
       console.log(`[WhatsApp] Mensaje recibido en "${chat.name}": ${msg.body.substring(0, 80)}...`);
       await procesarTexto(mensaje.body, 'whatsapp');
     } catch (error) {

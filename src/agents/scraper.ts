@@ -182,6 +182,15 @@ export function forzarScraping(): void {
   ejecutarScraping().catch(err => console.error('[Scraper] Error en scraping manual:', err));
 }
 
+/** Devuelve el estado del circuit breaker por portal para mostrarlo en el dashboard. */
+export function getCircuitBreakerStatus(): Array<{ portal: string; fallos: number; cooldownRestante: number }> {
+  return Array.from(new Set([...portalFallos.keys(), ...portalCooldown.keys()])).map(nombre => ({
+    portal: nombre,
+    fallos: portalFallos.get(nombre) ?? 0,
+    cooldownRestante: portalCooldown.get(nombre) ?? 0,
+  }));
+}
+
 export function iniciarScraper(): void {
   const minutos = ENV.SCRAPING_INTERVAL_MINUTES;
   const cronExpr = `*/${minutos} * * * *`;

@@ -3,6 +3,35 @@ import { existeDuplicado, registrarReporte, obtenerPendientesFramer } from './de
 import { enviarAFramer } from './framer';
 import { incrementarMetrica } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
+import { ENV } from '../config/env';
+
+// F2: detectar spike — si entran N reportes relevantes en una ventana de tiempo, alertar
+const SPIKE_VENTANA_MS = 10 * 60 * 1000;  // 10 minutos
+const SPIKE_UMBRAL = 5;                    // 5 reportes en 10 min = posible incidente activo
+const timestampsRecientes: number[] = [];
+
+async function verificarSpike(): Promise<void> {
+  const ahora = Date.now();
+  // Limpiar entradas fuera de la ventana
+  while (timestampsRecientes.length > 0 && ahora - timestampsRecientes[0] > SPIKE_VENTANA_MS) {
+    timestampsRecientes.shift();
+  }
+  timestampsRecientes.push(ahora);
+
+  if (timestampsRecientes.length === SPIKE_UMBRAL) {
+    const msg = `🚨 *Sistema Varone — Spike detectado*\n${SPIKE_UMBRAL} reportes en los últimos 10 minutos.\nPosible incidente activo en curso.`;
+    console.warn(`[Pipeline] ${msg}`);
+    const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+    if (telegramToken && telegramChatId) {
+      await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: telegramChatId, text: msg, parse_mode: 'Markdown' }),
+      }).catch(e => console.error('[Pipeline] Error enviando alerta spike:', e));
+    }
+  }
+}
 
 const PIPELINE_TIMEOUT_MS = 30_000;
 const URL_FETCH_TIMEOUT_MS = 10_000;
@@ -83,8 +112,8 @@ export async function procesarTexto(
     texto = enriquecido.texto;
     if (enriquecido.url) urlNoticia = enriquecido.url;
 
-    // Verificar duplicado antes de llamar a la IA para ahorrar quota de API
-    const esDuplicado = await existeDuplicado(texto);
+    // Verificar duplicado antes de llamar a la IA para ahorrar quota de API (por hash y por URL)
+    const esDuplicado = await existeDuplicado(texto, urlNoticia);
     if (esDuplicado) {
       incrementarMetrica('duplicadosDescartados');
       console.log('[Pipeline] Duplicado detectado, ignorando.');
@@ -109,6 +138,7 @@ export async function procesarTexto(
     const datosReporte: Record<string, unknown> = { ...reporte };
     const reporteId = await registrarReporte(texto, datosReporte);
     incrementarMetrica('reportesRegistrados');
+    await verificarSpike();
 
     // Enviar a Framer pasando el id para actualizar el flag
     const framerOk = await enviarAFramer(reporte, reporteId);
@@ -120,30 +150,55 @@ export async function procesarTexto(
   }
 }
 
+// R4: guard para evitar ejecuciones solapadas del cron de reintentos
+let reintentandoFramer = false;
+
 /**
  * Reintenta enviar a Framer los reportes que fallaron.
  * Se ejecuta periódicamente desde el cron.
+ * R2: backoff exponencial — solo reintenta si pasó suficiente tiempo desde el último intento.
+ * R4: guard de solapamiento — si ya está corriendo, omite la ejecución.
  */
 export async function reintentarFramerPendientes(): Promise<void> {
-  const pendientes = await obtenerPendientesFramer();
-  if (pendientes.length === 0) return;
+  if (reintentandoFramer) {
+    console.warn('[Pipeline] Reintentos Framer ya en curso, omitiendo ciclo.');
+    return;
+  }
 
-  console.log(`[Pipeline] Reintentando ${pendientes.length} reportes pendientes de Framer...`);
+  reintentandoFramer = true;
+  try {
+    const pendientes = await obtenerPendientesFramer();
+    if (pendientes.length === 0) return;
 
-  for (const r of pendientes) {
-    const reporte: Partial<ReporteIncidente> = {
-      fecha: r.fecha,
-      hora: 'desconocida',
-      ubicacion: r.ubicacion,
-      ruta: r.ruta,
-      tipoIncidente: r.tipoIncidente,
-      gravedad: r.gravedad ?? undefined,
-      descripcion: r.descripcion,
-      fuente: r.fuente as 'whatsapp' | 'scraping',
-      urlNoticia: r.urlNoticia ?? undefined,
-      victimas: r.victimas ?? undefined,
-      detenidos: r.detenidos ?? undefined,
-    };
-    await enviarAFramer(reporte as ReporteIncidente, r.id);
+    // R2: filtrar por backoff — solo reintentar si pasó 2^intentos * 15 minutos
+    const ahoraMs = Date.now();
+    const INTERVALO_BASE_MS = 15 * 60 * 1000;
+    const listos = pendientes.filter(r => {
+      const espera = Math.pow(2, r.framerIntentos) * INTERVALO_BASE_MS;
+      const ultimoIntento = new Date(r.creadoEn).getTime();
+      return ahoraMs - ultimoIntento >= espera;
+    });
+
+    if (listos.length === 0) return;
+    console.log(`[Pipeline] Reintentando ${listos.length}/${pendientes.length} reportes pendientes de Framer...`);
+
+    for (const r of listos) {
+      const reporte: Partial<ReporteIncidente> = {
+        fecha: r.fecha,
+        hora: 'desconocida',
+        ubicacion: r.ubicacion,
+        ruta: r.ruta,
+        tipoIncidente: r.tipoIncidente,
+        gravedad: r.gravedad ?? undefined,
+        descripcion: r.descripcion,
+        fuente: r.fuente as 'whatsapp' | 'scraping',
+        urlNoticia: r.urlNoticia ?? undefined,
+        victimas: r.victimas ?? undefined,
+        detenidos: r.detenidos ?? undefined,
+      };
+      await enviarAFramer(reporte as ReporteIncidente, r.id);
+    }
+  } finally {
+    reintentandoFramer = false;
   }
 }

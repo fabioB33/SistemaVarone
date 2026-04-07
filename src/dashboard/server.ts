@@ -83,7 +83,11 @@ export async function notificarDesconexion(reason: string): Promise<void> {
   }
 }
 
-export function startDashboard(port: number = 3000, onForzarScraping?: () => void) {
+export function startDashboard(
+  port: number = 3000,
+  onForzarScraping?: () => void,
+  onGetCircuitBreaker?: () => Array<{ portal: string; fallos: number; cooldownRestante: number }>,
+) {
   const app = express();
 
   app.use(express.json());
@@ -133,6 +137,12 @@ export function startDashboard(port: number = 3000, onForzarScraping?: () => voi
     }
   });
 
+  // F1: API: estado del circuit breaker por portal
+  app.get('/api/scraper/circuit-breaker', (_req, res) => {
+    const estado = onGetCircuitBreaker ? onGetCircuitBreaker() : [];
+    res.json(estado);
+  });
+
   // API: métricas del pipeline en tiempo real
   app.get('/api/metrics', (_req, res) => {
     const uptimeMs = Date.now() - pipelineMetrics.iniciadoEn.getTime();
@@ -174,12 +184,16 @@ export function startDashboard(port: number = 3000, onForzarScraping?: () => voi
       ];
     }
 
-    const reportes = await prisma.reporte.findMany({
-      where,
-      orderBy: { creadoEn: 'desc' },
-      take: 200,
-    });
-    res.json(reportes);
+    // D2: paginación para evitar devolver miles de registros de una vez
+    const pagina = Math.max(1, parseInt(String(req.query.pagina ?? '1'), 10));
+    const porPagina = Math.min(100, Math.max(1, parseInt(String(req.query.porPagina ?? '50'), 10)));
+    const skip = (pagina - 1) * porPagina;
+
+    const [reportes, total] = await Promise.all([
+      prisma.reporte.findMany({ where, orderBy: { creadoEn: 'desc' }, skip, take: porPagina }),
+      prisma.reporte.count({ where }),
+    ]);
+    res.json({ reportes, total, pagina, porPagina, totalPaginas: Math.ceil(total / porPagina) });
   });
 
   // API: stats

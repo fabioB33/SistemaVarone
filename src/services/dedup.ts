@@ -6,10 +6,19 @@ function generarHash(texto: string): string {
   return crypto.createHash('sha256').update(normalizado).digest('hex');
 }
 
-export async function existeDuplicado(texto: string): Promise<boolean> {
+export async function existeDuplicado(texto: string, urlNoticia?: string): Promise<boolean> {
   const hash = generarHash(texto);
-  const existente = await prisma.reporte.findUnique({ where: { hash } });
-  return existente !== null;
+  const porHash = await prisma.reporte.findUnique({ where: { hash } });
+  if (porHash) return true;
+
+  // R5: verificar también por URL — evita duplicados cuando alguien comparte
+  // un link en WhatsApp que el scraper también encontró (mismo artículo, texto distinto)
+  if (urlNoticia) {
+    const porUrl = await prisma.reporte.findFirst({ where: { urlNoticia } });
+    if (porUrl) return true;
+  }
+
+  return false;
 }
 
 export async function registrarReporte(texto: string, datos: Record<string, unknown>): Promise<number> {

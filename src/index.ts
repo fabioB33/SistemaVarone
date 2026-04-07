@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { ENV } from './config/env';
 import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
-import { iniciarScraper, detenerScraper, forzarScraping } from './agents/scraper';
+import { iniciarScraper, detenerScraper, forzarScraping, getCircuitBreakerStatus } from './agents/scraper';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
 
@@ -68,7 +68,7 @@ async function main() {
   });
 
   // Iniciar dashboard web
-  startDashboard(3000, forzarScraping);
+  startDashboard(3000, forzarScraping, getCircuitBreakerStatus);
 
   // Iniciar agentes
   iniciarWhatsApp();

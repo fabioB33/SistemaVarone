@@ -4,15 +4,23 @@ import { ENV } from '../config/env';
 import { SYSTEM_PROMPT } from '../config/prompts';
 import { RespuestaIA } from '../types';
 
-// Gemini
+// Singletons — evitar instanciar un nuevo cliente en cada llamada
+let _geminiModel: ReturnType<InstanceType<typeof GoogleGenerativeAI>['getGenerativeModel']> | null = null;
+let _openaiClient: OpenAI | null = null;
+
 function getGemini() {
-  const genAI = new GoogleGenerativeAI(ENV.GEMINI_API_KEY);
-  return genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  if (!_geminiModel) {
+    const genAI = new GoogleGenerativeAI(ENV.GEMINI_API_KEY);
+    _geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  }
+  return _geminiModel;
 }
 
-// OpenAI
 function getOpenAI() {
-  return new OpenAI({ apiKey: ENV.OPENAI_API_KEY });
+  if (!_openaiClient) {
+    _openaiClient = new OpenAI({ apiKey: ENV.OPENAI_API_KEY });
+  }
+  return _openaiClient;
 }
 
 export async function analizarConIA(texto: string): Promise<RespuestaIA> {
