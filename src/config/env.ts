@@ -27,6 +27,9 @@ export const ENV = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '',
 
+  // Número de WhatsApp para alertas operacionales (formato internacional sin +)
+  VARONE_WA_NUMBER: process.env.VARONE_WA_NUMBER || '5491144462389',
+
   // General
   NODE_ENV: process.env.NODE_ENV || 'development',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',

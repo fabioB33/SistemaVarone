@@ -5,6 +5,7 @@ import { ENV } from '../config/env';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 import prisma from '../services/prisma';
+import { notificar } from '../services/notificaciones';
 
 // Sesiones activas (token → timestamp de expiración)
 const activeSessions = new Map<string, number>();
@@ -57,30 +58,11 @@ export function setScrapingStatus(status: string) {
   lastScrapingTime = new Date();
 }
 
-// Notifica desconexión de WhatsApp al log y opcionalmente a Telegram
+// Notifica desconexión de WhatsApp via WhatsApp directo a Varone
 export async function notificarDesconexion(reason: string): Promise<void> {
-  const msg = `[ALERTA] WhatsApp desconectado: ${reason} — ${new Date().toLocaleString('es-AR')}`;
-  console.error(msg);
-
-  // Si hay webhook de Telegram configurado, enviar alerta
-  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-  const telegramChatId = process.env.TELEGRAM_CHAT_ID;
-  if (telegramToken && telegramChatId) {
-    try {
-      await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: telegramChatId,
-          text: `🚨 *Sistema Varone*\nWhatsApp desconectado\nMotivo: ${reason}\nHora: ${new Date().toLocaleString('es-AR')}\n\nReconexión automática en 10 segundos.`,
-          parse_mode: 'Markdown',
-        }),
-      });
-      console.log('[Alerta] Notificación enviada a Telegram.');
-    } catch (e) {
-      console.error('[Alerta] Error enviando a Telegram:', e);
-    }
-  }
+  console.error(`[ALERTA] WhatsApp desconectado: ${reason} — ${new Date().toLocaleString('es-AR')}`);
+  const msg = `🚨 *Sistema Varone*\nWhatsApp desconectado\nMotivo: ${reason}\nHora: ${new Date().toLocaleString('es-AR')}\n\nReconexión automática en progreso.`;
+  await notificar(msg);
 }
 
 export function startDashboard(

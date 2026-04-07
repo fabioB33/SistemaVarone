@@ -4,6 +4,7 @@ import { MensajeWhatsApp } from '../types';
 import { ENV } from '../config/env';
 import { procesarTexto } from '../services/pipeline';
 import { setQrData, setWaConnected, setWaDisconnected, notificarDesconexion } from '../dashboard/server';
+import { registrarClienteWA, notificar } from '../services/notificaciones';
 
 // Reconexión con backoff exponencial
 const RECONEXION_BASE_MS = 10_000;   // 10s primer intento
@@ -84,8 +85,10 @@ export function iniciarWhatsApp(): void {
 
   client.on('ready', async () => {
     console.log('[WhatsApp] Conectado y escuchando mensajes...');
-    intentosReconexion = 0; // resetear contador al conectar exitosamente
+    intentosReconexion = 0;
     setWaConnected();
+    // Registrar el cliente para que el módulo de notificaciones pueda usarlo
+    registrarClienteWA(client);
     // Procesar mensajes recientes perdidos durante la desconexión
     await procesarHistorialGrupo();
   });
@@ -137,19 +140,10 @@ export function iniciarWhatsApp(): void {
     const espera = calcularEsperaReconexion();
     console.log(`[WhatsApp] Reconexión intento ${intentosReconexion}/${RECONEXION_MAX_INTENTOS} en ${espera / 1000}s...`);
 
-    // Si superamos el máximo de intentos, enviar alerta crítica y seguir intentando cada 5min
     if (intentosReconexion >= RECONEXION_MAX_INTENTOS) {
-      const msg = `🚨 *Sistema Varone — ALERTA CRÍTICA*\nWhatsApp no pudo reconectar después de ${RECONEXION_MAX_INTENTOS} intentos.\nÚltimo motivo: ${reason}\nIntervención manual requerida.`;
+      const msg = `🚨 Sistema Varone — ALERTA CRÍTICA\nWhatsApp no pudo reconectar después de ${RECONEXION_MAX_INTENTOS} intentos.\nMotivo: ${reason}\nIntervención manual requerida.`;
       console.error(`[WhatsApp] ${msg}`);
-      const token = process.env.TELEGRAM_BOT_TOKEN;
-      const chatId = process.env.TELEGRAM_CHAT_ID;
-      if (token && chatId) {
-        fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
-        }).catch(e => console.error('[WhatsApp] Error enviando alerta crítica:', e));
-      }
+      await notificar(msg);
     }
 
     setTimeout(() => client.initialize(), espera);

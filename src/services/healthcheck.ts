@@ -1,18 +1,7 @@
 import prisma from './prisma';
-import { ENV } from '../config/env';
+import { notificar } from './notificaciones';
 
 const TZ_AR = 'America/Argentina/Buenos_Aires';
-
-async function enviarTelegram(texto: string): Promise<void> {
-  const token = ENV.TELEGRAM_BOT_TOKEN;
-  const chatId = ENV.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return;
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: texto, parse_mode: 'Markdown' }),
-  });
-}
 
 /**
  * Healthcheck diario: resume actividad del día anterior y confirma que el sistema está vivo.
@@ -71,7 +60,7 @@ export async function enviarHealthcheck(): Promise<void> {
       `🕐 Generado: ${horaActual}hs`,
     ].filter(l => l !== undefined).join('\n');
 
-    await enviarTelegram(msg);
+    await notificar(msg);
     console.log(`[Healthcheck] Reporte diario enviado — ${totalAyer} reportes ayer.`);
   } catch (e) {
     console.error('[Healthcheck] Error generando reporte diario:', e);
