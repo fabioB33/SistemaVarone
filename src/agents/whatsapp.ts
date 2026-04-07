@@ -7,8 +7,12 @@ import { setQrData, setWaConnected, setWaDisconnected, notificarDesconexion } fr
 
 let client: Client;
 
-// Rastrea mensajes ya procesados del historial para no duplicar con eventos en tiempo real
+// Rastrea mensajes ya procesados del historial para no duplicar con eventos en tiempo real.
+// Se limpia cada hora para evitar memory leak en sesiones largas.
 const procesadosAlReconectar = new Set<string>();
+setInterval(() => {
+  procesadosAlReconectar.clear();
+}, 60 * 60 * 1000);
 
 // Rate limit por remitente: máximo 1 mensaje cada 60 segundos por sender
 const RATE_LIMIT_MS = 60 * 1000;

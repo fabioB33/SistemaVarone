@@ -5,6 +5,51 @@ import { incrementarMetrica } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
 
 const PIPELINE_TIMEOUT_MS = 30_000;
+const URL_FETCH_TIMEOUT_MS = 10_000;
+
+const URL_REGEX = /^https?:\/\/\S+$/;
+
+/**
+ * Si el texto es una URL sola, intenta obtener el contenido de la página.
+ * Extrae el texto visible de manera simple (sin dependencias extra).
+ * Devuelve el texto enriquecido o el original si falla.
+ */
+async function enriquecerSiEsUrl(texto: string, urlNoticia?: string): Promise<{ texto: string; url?: string }> {
+  const trimmed = texto.trim();
+  if (!URL_REGEX.test(trimmed)) return { texto, url: urlNoticia };
+
+  const url = trimmed;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), URL_FETCH_TIMEOUT_MS);
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SistemaVarone/1.0)' },
+    });
+    clearTimeout(timer);
+
+    if (!resp.ok) return { texto, url };
+
+    const html = await resp.text();
+    // Extraer texto visible de forma simple: remover tags y decodificar entidades básicas
+    const sinTags = html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .substring(0, 3000); // Limitar para no saturar el prompt
+
+    if (sinTags.length > 100) {
+      console.log(`[Pipeline] URL enriquecida: ${url.substring(0, 60)}... (${sinTags.length} chars)`);
+      return { texto: sinTags, url };
+    }
+  } catch (err) {
+    console.warn(`[Pipeline] No se pudo obtener contenido de URL ${url}:`, err instanceof Error ? err.message : err);
+  }
+  return { texto, url };
+}
 
 function conTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -32,6 +77,11 @@ export async function procesarTexto(
 
   try {
     incrementarMetrica('textosTotales');
+
+    // C3: Si el mensaje es solo una URL, obtener el contenido antes de analizar
+    const enriquecido = await enriquecerSiEsUrl(texto, urlNoticia);
+    texto = enriquecido.texto;
+    if (enriquecido.url) urlNoticia = enriquecido.url;
 
     // Verificar duplicado antes de llamar a la IA para ahorrar quota de API
     const esDuplicado = await existeDuplicado(texto);

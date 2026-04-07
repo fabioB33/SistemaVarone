@@ -1,12 +1,10 @@
 import express from 'express';
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
 import QRCode from 'qrcode';
 import { ENV } from '../config/env';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
-
-const prisma = new PrismaClient();
+import prisma from '../services/prisma';
 
 // Sesiones activas (token → timestamp de expiración)
 const activeSessions = new Map<string, number>();

@@ -16,6 +16,9 @@ if (ENV.AI_PROVIDER === 'openai' && !ENV.OPENAI_API_KEY) {
 if (!ENV.DATABASE_URL) {
   erroresEnv.push('DATABASE_URL es requerida');
 }
+if (!ENV.WA_GROUP_NAME) {
+  erroresEnv.push('WA_GROUP_NAME es requerida — nombre exacto del grupo (ej: "Mesa Pirateria Camiones")');
+}
 if (ENV.NODE_ENV === 'production') {
   if (ENV.DASHBOARD_USER === 'varone') {
     erroresEnv.push('DASHBOARD_USER no puede ser el valor por defecto en producción');

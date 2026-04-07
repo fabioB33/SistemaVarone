@@ -1,7 +1,5 @@
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import prisma from './prisma';
 
 function generarHash(texto: string): string {
   const normalizado = texto.toLowerCase().replace(/\s+/g, ' ').trim();
