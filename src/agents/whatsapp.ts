@@ -136,7 +136,7 @@ export function iniciarWhatsApp(): void {
       }
 
       console.log(`[WhatsApp] Mensaje recibido en "${chat.name}": ${msg.body.substring(0, 80)}...`);
-      await procesarTexto(mensaje.body, 'whatsapp');
+      await procesarTexto(mensaje.body, 'whatsapp', undefined, undefined, msg.id.id);
     } catch (error) {
       console.error('[WhatsApp] Error procesando mensaje:', error);
     }

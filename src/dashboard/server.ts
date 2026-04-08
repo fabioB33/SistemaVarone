@@ -35,6 +35,21 @@ export interface MensajeGrupo {
   body: string;
   timestamp: number;
   type: string;    // 'chat' | 'image' | 'audio' | etc.
+  procesado?: boolean | null;  // null = en proceso, true = fue reporte, false = descartado
+}
+
+// Historial en memoria de los últimos 50 mensajes para hacer backfill al conectar
+const HISTORIAL_MAX = 50;
+const historialMensajes: MensajeGrupo[] = [];
+
+/**
+ * Emite un evento SSE tipado a todos los clientes conectados.
+ */
+function emitirSSE(event: string, data: unknown): void {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients.values()) {
+    client.res.write(payload);
+  }
 }
 
 /**
@@ -42,10 +57,36 @@ export interface MensajeGrupo {
  * Llamado desde el agente de WhatsApp cada vez que llega un mensaje.
  */
 export function emitirMensajeGrupo(msg: MensajeGrupo): void {
-  const data = JSON.stringify(msg);
-  for (const client of sseClients.values()) {
-    client.res.write(`data: ${data}\n\n`);
-  }
+  // Guardar en historial para backfill de nuevos clientes
+  historialMensajes.push(msg);
+  if (historialMensajes.length > HISTORIAL_MAX) historialMensajes.shift();
+  emitirSSE('mensaje', msg);
+}
+
+/**
+ * Actualiza el estado de procesamiento de un mensaje ya emitido.
+ * Llamado desde el pipeline cuando termina de analizar el texto.
+ */
+export function emitirEstadoProcesado(msgId: string, fueReporte: boolean): void {
+  emitirSSE('procesado', { id: msgId, fueReporte });
+}
+
+/**
+ * Emite el QR actual a todos los clientes SSE conectados.
+ * Llamado inmediatamente cuando whatsapp-web.js genera un nuevo QR.
+ */
+export async function emitirQR(qr: string): Promise<void> {
+  qrData = qr;
+  waStatus = 'qr';
+  const qrImage = await QRCode.toDataURL(qr, { width: 300 }).catch(() => null);
+  if (qrImage) emitirSSE('qr', { qr: qrImage });
+}
+
+/**
+ * Emite cambio de estado de WhatsApp (connected / disconnected) via SSE.
+ */
+export function emitirEstadoWA(status: 'connected' | 'disconnected'): void {
+  emitirSSE('wa_status', { status });
 }
 
 // Contadores de pipeline en memoria (se resetean al reiniciar el proceso)
@@ -63,18 +104,20 @@ export function incrementarMetrica(metrica: keyof Omit<typeof pipelineMetrics, '
   pipelineMetrics[metrica]++;
 }
 
-// Funciones para actualizar estado desde index.ts
+// Funciones para actualizar estado desde whatsapp.ts
 export function setQrData(qr: string) {
-  qrData = qr;
-  waStatus = 'qr';
+  // emitirQR ya actualiza qrData y waStatus, y hace push via SSE
+  emitirQR(qr).catch(err => console.error('[Dashboard] Error emitiendo QR via SSE:', err));
 }
 export function setWaConnected() {
   waStatus = 'connected';
   qrData = null;
+  emitirEstadoWA('connected');
 }
 export function setWaDisconnected() {
   waStatus = 'disconnected';
   qrData = null;
+  emitirEstadoWA('disconnected');
 }
 
 
@@ -138,6 +181,24 @@ export function startDashboard(port: number = 3000) {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.flushHeaders();
+
+    // Enviar estado inicial: wa_status + nombre del grupo + QR si está pendiente
+    res.write(`event: init\ndata: ${JSON.stringify({
+      waStatus,
+      grupoNombre: ENV.WA_GROUP_NAME,
+    })}\n\n`);
+
+    // Backfill: enviar historial de mensajes recientes para que el panel no arranque vacío
+    for (const msg of historialMensajes) {
+      res.write(`event: mensaje\ndata: ${JSON.stringify(msg)}\n\n`);
+    }
+
+    // Si hay QR pendiente, enviarlo inmediatamente al nuevo cliente
+    if (waStatus === 'qr' && qrData) {
+      QRCode.toDataURL(qrData, { width: 300 })
+        .then(qrImage => res.write(`event: qr\ndata: ${JSON.stringify({ qr: qrImage })}\n\n`))
+        .catch(() => {});
+    }
 
     const id = ++sseClientId;
     sseClients.set(id, { res, id });
@@ -617,7 +678,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <!-- Panel derecho: chat en tiempo real del grupo -->
   <div class="panel-chat">
     <div class="chat-header">
-      <h2>💬 Grupo en vivo</h2>
+      <div>
+        <h2>💬 Grupo en vivo</h2>
+        <div id="chat-grupo-nombre" style="font-size:11px;color:#475569;margin-top:2px;">—</div>
+      </div>
       <div style="display:flex;align-items:center;gap:6px;">
         <span id="chat-conn-label" style="font-size:11px;color:#475569;">Sin conexión</span>
         <div class="chat-conn-dot" id="chat-conn-dot"></div>
@@ -785,6 +849,19 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     txt.textContent = d.resumen || '—';
   }
 
+  // ── WA STATUS (actualiza badge sin polling) ────────────
+  function aplicarWaStatus(status) {
+    const waBadge = document.getElementById('wa-badge');
+    if (status === 'connected') {
+      waBadge.textContent = 'WA Conectado'; waBadge.className = 'topbar-badge badge-live';
+      document.getElementById('qr-overlay').style.display = 'none';
+    } else if (status === 'qr') {
+      waBadge.textContent = 'Escanear QR'; waBadge.className = 'topbar-badge badge-warn';
+    } else {
+      waBadge.textContent = 'WA Desconectado'; waBadge.className = 'topbar-badge badge-off';
+    }
+  }
+
   // ── SSE — CHAT EN TIEMPO REAL ───────────────────────────
   function conectarSSE() {
     const dot = document.getElementById('chat-conn-dot');
@@ -800,17 +877,59 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       label.style.color = '#4ade80';
     };
 
-    sseSource.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      agregarMensaje(msg);
-    };
-
     sseSource.onerror = () => {
       dot.classList.remove('connected');
       label.textContent = 'Reconectando...';
       label.style.color = '#f59e0b';
       // EventSource reconecta automáticamente
     };
+
+    // Estado inicial + nombre del grupo + backfill
+    sseSource.addEventListener('init', (e) => {
+      const d = JSON.parse(e.data);
+      aplicarWaStatus(d.waStatus);
+      if (d.grupoNombre) {
+        document.getElementById('chat-grupo-nombre').textContent = d.grupoNombre;
+      }
+    });
+
+    // Mensajes del grupo (en vivo + backfill al conectar)
+    sseSource.addEventListener('mensaje', (e) => {
+      const msg = JSON.parse(e.data);
+      agregarMensaje(msg);
+    });
+
+    // QR push: llega inmediatamente cuando WA lo genera, sin esperar polling
+    sseSource.addEventListener('qr', (e) => {
+      const d = JSON.parse(e.data);
+      aplicarWaStatus('qr');
+      document.getElementById('qr-img').src = d.qr;
+      document.getElementById('qr-overlay').style.display = 'flex';
+    });
+
+    // Cambio de estado de WA (connected / disconnected)
+    sseSource.addEventListener('wa_status', (e) => {
+      const d = JSON.parse(e.data);
+      aplicarWaStatus(d.status);
+      // Al reconectar refrescar stats para actualizar contadores
+      if (d.status === 'connected') { cargarStats(); cargarMetrics(); }
+    });
+
+    // Resultado de procesamiento IA: actualiza el ícono en la burbuja del mensaje
+    sseSource.addEventListener('procesado', (e) => {
+      const d = JSON.parse(e.data);
+      const bubble = document.querySelector('[data-msg-id="' + d.id + '"]');
+      if (!bubble) return;
+      const indicator = bubble.querySelector('.msg-indicator');
+      if (!indicator) return;
+      if (d.fueReporte) {
+        indicator.textContent = '🚨 Reporte registrado';
+        indicator.style.color = '#f87171';
+      } else {
+        indicator.textContent = '✓ Sin novedad';
+        indicator.style.color = '#475569';
+      }
+    });
   }
 
   function agregarMensaje(msg) {
@@ -818,16 +937,30 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     const empty = document.getElementById('chat-empty');
     if (empty) empty.style.display = 'none';
 
+    // No duplicar mensajes del backfill si ya están en el DOM
+    if (document.querySelector('[data-msg-id="' + msg.id + '"]')) return;
+
     const isMultimedia = msg.type !== 'chat';
     const hora = new Date(msg.timestamp * 1000).toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' });
     const body = isMultimedia ? msg.body : escapeHtml(msg.body);
 
+    // Estado procesado: null = analizando (solo para msgs en vivo), true/false = resultado conocido
+    const indicatorHtml = msg.procesado === true
+      ? '<div class="msg-indicator" style="font-size:10px;color:#f87171;margin-top:2px;">🚨 Reporte registrado</div>'
+      : msg.procesado === false
+        ? '<div class="msg-indicator" style="font-size:10px;color:#475569;margin-top:2px;">✓ Sin novedad</div>'
+        : msg.type === 'chat'
+          ? '<div class="msg-indicator" style="font-size:10px;color:#334155;margin-top:2px;">· analizando...</div>'
+          : '';
+
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble msg-new';
+    bubble.setAttribute('data-msg-id', msg.id);
     bubble.innerHTML = \`
       <div class="msg-name">\${escapeHtml(msg.fromName)}</div>
       <div class="msg-text \${isMultimedia ? 'multimedia' : ''}">\${body}</div>
       <div class="msg-time">\${hora}</div>
+      \${indicatorHtml}
     \`;
     container.appendChild(bubble);
 
@@ -861,7 +994,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     cargarReportes(1);
     cargarResumen();
     conectarSSE();
-    // Refresh de stats y reportes cada 30s
+    // El SSE ya actualiza el estado WA en tiempo real.
+    // Polling solo para stats/reportes (contadores, paginación).
     setInterval(() => { cargarStats(); cargarMetrics(); }, 30_000);
     setInterval(() => cargarReportes(paginaActual), 30_000);
   }

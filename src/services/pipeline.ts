@@ -1,7 +1,7 @@
 import { analizarConIA } from './ia';
 import { existeDuplicado, registrarReporte, obtenerPendientesFramer } from './dedup';
 import { enviarAFramer } from './framer';
-import { incrementarMetrica } from '../dashboard/server';
+import { incrementarMetrica, emitirEstadoProcesado } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
 import { ENV } from '../config/env';
 
@@ -100,7 +100,8 @@ export async function procesarTexto(
   texto: string,
   fuente: 'whatsapp' | 'scraping',
   urlNoticia?: string,
-  portalOrigen?: string
+  portalOrigen?: string,
+  waMsgId?: string   // id del mensaje de WhatsApp para actualizar el indicador en el chat
 ): Promise<void> {
   if (texto.trim().length < 15) return;
 
@@ -117,6 +118,7 @@ export async function procesarTexto(
     if (esDuplicado) {
       incrementarMetrica('duplicadosDescartados');
       console.log('[Pipeline] Duplicado detectado, ignorando.');
+      if (waMsgId) emitirEstadoProcesado(waMsgId, false);
       return;
     }
 
@@ -125,6 +127,7 @@ export async function procesarTexto(
     if (!resultado.esRelevante || !resultado.reporte) {
       incrementarMetrica('noRelevantesDescartados');
       console.log(`[Pipeline] Descartado (no relevante) - fuente: ${fuente}`);
+      if (waMsgId) emitirEstadoProcesado(waMsgId, false);
       return;
     }
 
@@ -144,6 +147,7 @@ export async function procesarTexto(
     const framerOk = await enviarAFramer(reporte, reporteId);
     incrementarMetrica(framerOk ? 'framerEnviados' : 'framerFallidos');
 
+    if (waMsgId) emitirEstadoProcesado(waMsgId, true);
     console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente})`);
   } catch (error) {
     console.error(`[Pipeline] Error procesando texto (${fuente}):`, error);
