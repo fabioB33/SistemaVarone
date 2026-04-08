@@ -1,7 +1,6 @@
 import cron from 'node-cron';
 import { ENV } from './config/env';
 import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
-import { iniciarScraper, detenerScraper, forzarScraping, getCircuitBreakerStatus } from './agents/scraper';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
 import { enviarHealthcheck } from './services/healthcheck';
@@ -19,6 +18,9 @@ if (!ENV.DATABASE_URL) {
 }
 if (!ENV.WA_GROUP_NAME) {
   erroresEnv.push('WA_GROUP_NAME es requerida — nombre exacto del grupo (ej: "Mesa Pirateria Camiones")');
+}
+if (ENV.NODE_ENV === 'production' && !ENV.VARONE_WA_NUMBER) {
+  erroresEnv.push('VARONE_WA_NUMBER es requerida en producción para enviar alertas');
 }
 if (ENV.NODE_ENV === 'production') {
   if (ENV.DASHBOARD_USER === 'varone') {
@@ -40,7 +42,6 @@ console.log('===========================================');
 console.log(`  Entorno: ${ENV.NODE_ENV}`);
 console.log(`  IA: ${ENV.AI_PROVIDER}`);
 console.log(`  Grupo WA: ${ENV.WA_GROUP_NAME || '(no configurado)'}`);
-console.log(`  Scraping cada: ${ENV.SCRAPING_INTERVAL_MINUTES} minutos`);
 console.log('===========================================\n');
 
 // Conectar a la DB con reintentos antes de arrancar los agentes
@@ -69,11 +70,10 @@ async function main() {
   });
 
   // Iniciar dashboard web
-  startDashboard(3000, forzarScraping, getCircuitBreakerStatus);
+  startDashboard(3000);
 
-  // Iniciar agentes
+  // Iniciar agente WhatsApp
   iniciarWhatsApp();
-  iniciarScraper();
 
   // Cron: reintentar reportes pendientes de Framer cada 15 minutos
   cron.schedule('*/15 * * * *', async () => {
@@ -90,7 +90,6 @@ async function main() {
 async function shutdown(signal: string) {
   console.log(`\n[Sistema] Señal ${signal} recibida. Cerrando...`);
   detenerWhatsApp();
-  await detenerScraper();
   process.exit(0);
 }
 

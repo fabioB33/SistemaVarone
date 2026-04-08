@@ -3,7 +3,7 @@ import qrcode from 'qrcode-terminal';
 import { MensajeWhatsApp } from '../types';
 import { ENV } from '../config/env';
 import { procesarTexto } from '../services/pipeline';
-import { setQrData, setWaConnected, setWaDisconnected, notificarDesconexion } from '../dashboard/server';
+import { setQrData, setWaConnected, setWaDisconnected, notificarDesconexion, emitirMensajeGrupo } from '../dashboard/server';
 import { registrarClienteWA, notificar } from '../services/notificaciones';
 
 // Reconexión con backoff exponencial
@@ -112,6 +112,17 @@ export function iniciarWhatsApp(): void {
         timestamp: msg.timestamp,
         groupName: chat.name,
       };
+
+      // Emitir TODOS los mensajes al dashboard en tiempo real (antes de cualquier filtro)
+      const contact = await msg.getContact().catch(() => null);
+      emitirMensajeGrupo({
+        id: msg.id.id,
+        from: msg.from,
+        fromName: contact?.pushname || contact?.name || msg.from.split('@')[0],
+        body: msg.type === 'chat' ? msg.body : `[${msg.type}]`,
+        timestamp: msg.timestamp,
+        type: msg.type,
+      });
 
       if (!dentroDeLimite(msg.from)) {
         console.log(`[WhatsApp] Rate limit: ignorando mensaje de ${msg.from} (muy frecuente)`);

@@ -4,7 +4,7 @@ import { PORTALES } from '../config/portales';
 import { ENV } from '../config/env';
 import { NoticiaCruda, PortalConfig } from '../types';
 import { procesarTexto } from '../services/pipeline';
-import { setScrapingStatus } from '../dashboard/server';
+// scraper.ts — archivo conservado para referencia, no usado por el sistema
 
 let browser: Browser | null = null;
 let scraperCorriendo = false;
@@ -139,7 +139,6 @@ async function ejecutarScraping(): Promise<void> {
   }
 
   scraperCorriendo = true;
-  setScrapingStatus('running');
   console.log('[Scraper] Iniciando ronda de scraping...');
 
   try {
@@ -174,7 +173,6 @@ async function ejecutarScraping(): Promise<void> {
       browser = null;
     }
     scraperCorriendo = false;
-    setScrapingStatus('idle');
   }
 }
 

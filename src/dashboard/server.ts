@@ -22,8 +22,31 @@ setInterval(() => {
 // Estado compartido del QR y WhatsApp
 let qrData: string | null = null;
 let waStatus: 'disconnected' | 'qr' | 'connected' = 'disconnected';
-let lastScrapingTime: Date | null = null;
-let scrapingStatus: string = 'Sin ejecutar';
+
+// SSE — clientes suscritos al feed en tiempo real del grupo
+type SseClient = { res: import('express').Response; id: number };
+let sseClientId = 0;
+const sseClients = new Map<number, SseClient>();
+
+export interface MensajeGrupo {
+  id: string;
+  from: string;
+  fromName: string;
+  body: string;
+  timestamp: number;
+  type: string;    // 'chat' | 'image' | 'audio' | etc.
+}
+
+/**
+ * Emite un mensaje del grupo a todos los clientes SSE conectados.
+ * Llamado desde el agente de WhatsApp cada vez que llega un mensaje.
+ */
+export function emitirMensajeGrupo(msg: MensajeGrupo): void {
+  const data = JSON.stringify(msg);
+  for (const client of sseClients.values()) {
+    client.res.write(`data: ${data}\n\n`);
+  }
+}
 
 // Contadores de pipeline en memoria (se resetean al reiniciar el proceso)
 const pipelineMetrics = {
@@ -53,10 +76,7 @@ export function setWaDisconnected() {
   waStatus = 'disconnected';
   qrData = null;
 }
-export function setScrapingStatus(status: string) {
-  scrapingStatus = status;
-  lastScrapingTime = new Date();
-}
+
 
 // Notifica desconexión de WhatsApp via WhatsApp directo a Varone
 export async function notificarDesconexion(reason: string): Promise<void> {
@@ -65,11 +85,7 @@ export async function notificarDesconexion(reason: string): Promise<void> {
   await notificar(msg);
 }
 
-export function startDashboard(
-  port: number = 3000,
-  onForzarScraping?: () => void,
-  onGetCircuitBreaker?: () => Array<{ portal: string; fallos: number; cooldownRestante: number }>,
-) {
+export function startDashboard(port: number = 3000) {
   const app = express();
 
   app.use(express.json());
@@ -109,20 +125,32 @@ export function startDashboard(
     res.status(401).json({ error: 'No autorizado' });
   });
 
-  // API: forzar scraping manual
-  app.post('/api/scraper/run', (_req, res) => {
-    if (onForzarScraping) {
-      onForzarScraping();
-      res.json({ ok: true, mensaje: 'Scraping iniciado.' });
-    } else {
-      res.status(503).json({ ok: false, error: 'Scraper no disponible.' });
+  // API: SSE — feed en tiempo real de mensajes del grupo de WhatsApp
+  app.get('/api/mensajes/stream', (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token as string;
+    if (!token || !activeSessions.has(token) || Date.now() >= (activeSessions.get(token) ?? 0)) {
+      res.status(401).end();
+      return;
     }
-  });
 
-  // F1: API: estado del circuit breaker por portal
-  app.get('/api/scraper/circuit-breaker', (_req, res) => {
-    const estado = onGetCircuitBreaker ? onGetCircuitBreaker() : [];
-    res.json(estado);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.flushHeaders();
+
+    const id = ++sseClientId;
+    sseClients.set(id, { res, id });
+
+    // Heartbeat cada 30s para mantener la conexión viva
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n');
+    }, 30_000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      sseClients.delete(id);
+    });
   });
 
   // API: métricas del pipeline en tiempo real
@@ -200,8 +228,6 @@ export function startDashboard(
       porFuente: porFuente.map(r => ({ fuente: r.fuente, count: Number(r.count) })),
       porGravedad: porGravedad.map(r => ({ gravedad: r.gravedad, count: Number(r.count) })),
       waStatus,
-      scrapingStatus,
-      lastScrapingTime,
     });
   });
 
@@ -444,6 +470,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+
 const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -453,498 +480,392 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { scroll-behavior: smooth; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
-
-    /* Header */
-    .header { background: #1e293b; padding: 16px 32px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
-    .header h1 { font-size: 20px; font-weight: 600; }
-    .header .live-badge { background: #ef4444; color: white; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 1px; animation: live-blink 2s infinite; margin-left: 12px; }
-    @keyframes live-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-    .header .status { display: flex; gap: 16px; align-items: center; font-size: 13px; color: #94a3b8; }
-    .header .clock { font-size: 14px; font-weight: 600; color: #e2e8f0; font-variant-numeric: tabular-nums; }
-    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-    .status-dot.green { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
-    .status-dot.yellow { background: #eab308; box-shadow: 0 0 8px #eab308; }
-    .status-dot.red { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
 
     /* Layout */
-    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-    .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
-    @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-    .card { background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; opacity: 0; transform: translateY(16px); animation: card-enter 0.5s ease-out forwards; transition: transform 0.25s, box-shadow 0.25s; }
-    .card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px rgba(0,0,0,0.4); }
-    .card:nth-child(1) { animation-delay: 0s; }
-    .card:nth-child(2) { animation-delay: 0.07s; }
-    .card:nth-child(3) { animation-delay: 0.14s; }
-    .card:nth-child(4) { animation-delay: 0.21s; }
-    .card:nth-child(5) { animation-delay: 0.28s; }
-    @keyframes card-enter { to { opacity: 1; transform: translateY(0); } }
-    .card h3 { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
-    .card .value { font-size: 28px; font-weight: 700; }
-    .card .value.blue { color: #3b82f6; }
-    .card .value.green { color: #22c55e; }
-    .card .value.orange { color: #f97316; }
-    .card .value.red { color: #ef4444; }
-    .card .value.yellow { color: #eab308; }
-    .card .sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+    .app { display: grid; grid-template-columns: 1fr 420px; grid-template-rows: 56px 1fr; height: 100vh; }
+    .topbar { grid-column: 1 / -1; background: #1e293b; border-bottom: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .topbar h1 { font-size: 15px; font-weight: 700; color: #f1f5f9; letter-spacing: -0.3px; }
+    .topbar-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; letter-spacing: 0.8px; text-transform: uppercase; }
+    .badge-live { background: #22c55e20; color: #4ade80; border: 1px solid #22c55e40; }
+    .badge-warn { background: #f59e0b20; color: #fbbf24; border: 1px solid #f59e0b40; }
+    .badge-off  { background: #64748b20; color: #94a3b8; border: 1px solid #64748b40; }
+    .topbar-right { display: flex; align-items: center; gap: 16px; }
+    .stat-pill { font-size: 12px; color: #64748b; }
+    .stat-pill span { color: #e2e8f0; font-weight: 600; }
+    .logout-btn { background: none; border: 1px solid #334155; color: #94a3b8; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+    .logout-btn:hover { border-color: #ef4444; color: #f87171; }
 
-    /* Panels */
-    .panels { display: grid; grid-template-columns: 1fr 340px; gap: 20px; }
-    @media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
-    .panel { background: #1e293b; border-radius: 12px; border: 1px solid #334155; overflow: hidden; }
-    .panel-header { padding: 14px 20px; border-bottom: 1px solid #334155; font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
-    .panel-header .filter-bar { display: flex; gap: 6px; }
-    .filter-btn { background: #334155; border: none; color: #94a3b8; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 0.2s; }
-    .filter-btn:hover { background: #475569; color: #e2e8f0; }
-    .filter-btn.active { background: #3b82f6; color: white; }
-    .panel-body { padding: 0; max-height: 700px; overflow-y: auto; }
+    /* Panel izquierdo: reportes */
+    .panel-reportes { overflow-y: auto; background: #0f172a; }
+    .panel-header { padding: 20px 24px 12px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: #0f172a; z-index: 10; border-bottom: 1px solid #1e293b; }
+    .panel-header h2 { font-size: 13px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.8px; }
+    .filtros { display: flex; gap: 8px; padding: 12px 24px; background: #0f172a; position: sticky; top: 53px; z-index: 9; border-bottom: 1px solid #1e293b; }
+    .filtro-select { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 5px 10px; border-radius: 6px; font-size: 12px; outline: none; }
+    .busqueda-input { flex: 1; background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 5px 10px; border-radius: 6px; font-size: 12px; outline: none; }
+    .busqueda-input:focus { border-color: #3b82f6; }
+    .resumen-box { margin: 16px 24px; background: #1e293b; border: 1px solid #3b82f640; border-radius: 10px; padding: 14px 16px; }
+    .resumen-box .resumen-label { font-size: 10px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; }
+    .resumen-box p { font-size: 13px; color: #cbd5e1; line-height: 1.6; }
+    .reportes-list { padding: 0 24px 24px; }
+    .reporte-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; transition: border-color 0.2s; }
+    .reporte-card:hover { border-color: #475569; }
+    .reporte-card.alta { border-left: 3px solid #ef4444; }
+    .reporte-card.media { border-left: 3px solid #f59e0b; }
+    .reporte-card.baja { border-left: 3px solid #22c55e; }
+    .rc-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+    .rc-tipo { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.6px; background: #0f172a; color: #94a3b8; }
+    .rc-gravedad { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; text-transform: uppercase; }
+    .grav-alta { background: #ef44441a; color: #f87171; }
+    .grav-media { background: #f59e0b1a; color: #fbbf24; }
+    .grav-baja { background: #22c55e1a; color: #4ade80; }
+    .rc-ubicacion { font-size: 13px; font-weight: 600; color: #f1f5f9; }
+    .rc-ruta { font-size: 11px; color: #64748b; }
+    .rc-desc { font-size: 12px; color: #94a3b8; line-height: 1.5; margin-top: 4px; }
+    .rc-meta { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11px; color: #475569; }
+    .paginacion { display: flex; align-items: center; gap: 8px; justify-content: center; padding: 16px 0; }
+    .pag-btn { background: #1e293b; border: 1px solid #334155; color: #94a3b8; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+    .pag-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .pag-btn:not(:disabled):hover { border-color: #475569; color: #e2e8f0; }
+    .pag-info { font-size: 12px; color: #475569; }
 
-    /* Reportes */
-    .reporte { padding: 16px 20px; border-bottom: 1px solid #334155; transition: background 0.3s, box-shadow 0.3s, transform 0.3s; }
-    .reporte:hover { background: #1a2744; box-shadow: inset 0 0 0 1px #334155, 0 4px 16px -2px rgba(0,0,0,0.3); transform: translateY(-2px); }
-    .reporte:last-child { border-bottom: none; }
-    .reporte-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
-    .reporte .tipo { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
-    .tipo-robo { background: #ef44441a; color: #f87171; }
-    .tipo-asalto { background: #f973161a; color: #fb923c; }
-    .tipo-bloqueo { background: #eab3081a; color: #facc15; }
-    .tipo-alerta { background: #3b82f61a; color: #60a5fa; }
-    .tipo-tentativa { background: #a855f71a; color: #c084fc; }
-    .gravedad-alta { border-left: 3px solid #ef4444; }
-    .gravedad-media { border-left: 3px solid #f97316; }
-    .gravedad-baja { border-left: 3px solid #3b82f6; }
-    .badge-gravedad { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase; }
-    .badge-gravedad-alta { background: #ef44442a; color: #f87171; }
-    .badge-gravedad-media { background: #f973162a; color: #fb923c; }
-    .badge-gravedad-baja { background: #3b82f62a; color: #60a5fa; }
-    .badge-nuevo { background: #ef4444; color: white; font-size: 9px; padding: 2px 7px; border-radius: 3px; font-weight: 700; animation: nuevo-glow 1.5s ease-in-out infinite; }
-    @keyframes nuevo-glow { 0%,100% { box-shadow: 0 0 4px #ef444480; } 50% { box-shadow: 0 0 12px #ef4444cc, 0 0 24px #ef444440; } }
-    .badge-fuente { font-size: 11px; padding: 2px 6px; border-radius: 3px; }
-    .badge-wa { background: #22c55e1a; color: #4ade80; }
-    .badge-scraping { background: #3b82f61a; color: #60a5fa; }
-    .portal-name { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: #8b5cf61a; color: #a78bfa; }
-    .reporte .desc { font-size: 14px; color: #cbd5e1; line-height: 1.6; margin-bottom: 8px; }
-    .reporte .ubicacion-line { font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
-    .reporte .ubicacion-line strong { color: #e2e8f0; }
-    .reporte .detail-row { font-size: 12px; color: #94a3b8; display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
-    .reporte .detail-row span { display: flex; align-items: center; gap: 4px; }
-    .reporte .meta { font-size: 12px; color: #64748b; display: flex; justify-content: space-between; align-items: center; }
-    .reporte .timestamp { font-variant-numeric: tabular-nums; }
-    .reporte .url-link { font-size: 12px; color: #3b82f6; text-decoration: none; }
-    .reporte .url-link:hover { text-decoration: underline; color: #60a5fa; }
-    .btn-share-wa { display: inline-flex; align-items: center; gap: 6px; background: #25D36618; border: 1px solid #25D36650; color: #25D366; padding: 5px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none; transition: all 0.3s; }
-    .btn-share-wa:hover { background: #25D36630; border-color: #25D366; color: #fff; transform: translateY(-2px); box-shadow: 0 4px 12px #25D36630; }
-    .btn-share-wa .wa-icon { font-size: 15px; }
+    /* Panel derecho: chat en tiempo real */
+    .panel-chat { background: #0d1525; border-left: 1px solid #1e293b; display: flex; flex-direction: column; }
+    .chat-header { padding: 16px 18px; border-bottom: 1px solid #1e293b; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+    .chat-header h2 { font-size: 13px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.8px; }
+    .chat-conn-dot { width: 7px; height: 7px; border-radius: 50%; background: #475569; flex-shrink: 0; }
+    .chat-conn-dot.connected { background: #22c55e; box-shadow: 0 0 6px #22c55e80; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .chat-messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+    .chat-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; color: #334155; }
+    .chat-empty svg { opacity: 0.3; }
+    .chat-empty p { font-size: 13px; }
+    .msg-bubble { max-width: 100%; }
+    .msg-name { font-size: 10px; font-weight: 700; color: #3b82f6; margin-bottom: 2px; }
+    .msg-text { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #e2e8f0; line-height: 1.5; word-break: break-word; }
+    .msg-text.multimedia { color: #64748b; font-style: italic; }
+    .msg-time { font-size: 10px; color: #475569; margin-top: 3px; text-align: right; }
+    .msg-new { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .chat-count { font-size: 11px; color: #475569; padding: 8px 14px; border-top: 1px solid #1e293b; flex-shrink: 0; text-align: center; }
 
-    /* Resumen diario */
-    .resumen-card { background: linear-gradient(135deg, #1e293b 0%, #1a2744 50%, #1e1b4b40 100%); border: 1px solid #3b82f650; border-radius: 12px; padding: 24px 28px; margin-bottom: 20px; position: relative; overflow: hidden; border-left: 3px solid; border-image: linear-gradient(180deg, #3b82f6, #8b5cf6) 1; opacity: 0; transform: translateY(12px); animation: card-enter 0.6s ease-out 0.4s forwards; }
-    .resumen-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899, #8b5cf6, #3b82f6); background-size: 200% 100%; animation: gradient-shift 3s linear infinite; }
-    @keyframes gradient-shift { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
-    .resumen-card::after { content: ''; position: absolute; top: -50%; right: -20%; width: 200px; height: 200px; background: radial-gradient(circle, #3b82f608 0%, transparent 70%); pointer-events: none; }
-    .resumen-card .resumen-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 700; color: #60a5fa; text-transform: uppercase; letter-spacing: 0.5px; }
-    .resumen-card .resumen-header .resumen-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: #3b82f620; border-radius: 6px; font-size: 14px; animation: icon-pulse 2s ease-in-out infinite; }
-    @keyframes icon-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.1); } }
-    .resumen-card .resumen-text { font-size: 15px; color: #e2e8f0; line-height: 1.8; }
-    .resumen-card .resumen-meta { font-size: 11px; color: #64748b; margin-top: 12px; display: flex; align-items: center; gap: 6px; }
-    .resumen-card .resumen-meta::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; }
-    .resumen-loading { color: #64748b; font-size: 13px; animation: loading-fade 1.2s ease-in-out infinite; }
-    @keyframes loading-fade { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+    /* QR modal */
+    .qr-overlay { position: fixed; inset: 0; background: #0008; z-index: 100; display: flex; align-items: center; justify-content: center; }
+    .qr-card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 32px; text-align: center; max-width: 340px; }
+    .qr-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .qr-card p { font-size: 13px; color: #64748b; margin-bottom: 20px; }
+    .qr-card img { width: 240px; height: 240px; border-radius: 8px; background: #fff; }
+    .qr-close { margin-top: 16px; background: none; border: 1px solid #334155; color: #94a3b8; padding: 8px 20px; border-radius: 8px; cursor: pointer; }
 
-    /* WhatsApp / QR */
-    .qr-section { text-align: center; padding: 24px; }
-    .qr-section img { border-radius: 8px; }
-    .qr-section .msg { color: #94a3b8; font-size: 14px; margin-top: 12px; }
-    .connected-msg { color: #22c55e; font-size: 18px; font-weight: 700; }
-    .connected-box { background: #22c55e15; border: 2px solid #22c55e; border-radius: 12px; padding: 20px; text-align: center; }
-    .connected-box .icon { font-size: 40px; margin-bottom: 8px; }
-    .connected-box .pulse { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: #22c55e; margin-right: 8px; animation: pulse-anim 1.5s infinite; }
-    @keyframes pulse-anim { 0%,100% { box-shadow: 0 0 0 0 #22c55e80; } 50% { box-shadow: 0 0 0 10px #22c55e00; } }
-    .connected-box .grupo { color: #94a3b8; font-size: 13px; margin-top: 8px; }
-    .disconnected-box { background: #ef444415; border: 2px dashed #ef4444; border-radius: 12px; padding: 20px; text-align: center; }
-    .disconnected-box .icon { font-size: 40px; margin-bottom: 8px; }
-
-    /* Chart */
-    .tipo-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-    .tipo-bar .label { font-size: 13px; color: #94a3b8; width: 120px; }
-    .tipo-bar .bar { flex: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden; }
-    .tipo-bar .fill { height: 100%; border-radius: 4px; animation: bar-grow 0.8s ease-out; transform-origin: left; }
-    @keyframes bar-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-
-    /* Alerta sonora toggle */
-    .sound-toggle { background: #334155; border: 1px solid #475569; color: #e2e8f0; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
-    .sound-toggle.active { background: #22c55e20; border-color: #22c55e; color: #22c55e; }
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div style="display:flex;align-items:center">
+<div class="app" id="app" style="display:none">
+  <div class="topbar">
+    <div class="topbar-left">
+      <span style="font-size:20px">🛡️</span>
       <h1>Sistema Varone</h1>
-      <span class="live-badge">EN VIVO</span>
+      <span class="topbar-badge badge-off" id="wa-badge">Conectando...</span>
     </div>
-    <div class="status">
-      <span class="clock" id="clock"></span>
-      <span><span class="status-dot" id="wa-dot"></span> WA: <span id="wa-status">...</span></span>
-      <span>Scraping: <span id="scraping-status">...</span></span>
-      <button class="sound-toggle" id="sound-toggle" onclick="toggleSound()">&#x1F514; Alertas</button>
-      <button class="sound-toggle" id="notif-toggle" onclick="toggleNotifications()">&#x1F4E8; Notificaciones</button>
-      <button class="sound-toggle" onclick="logout()" style="border-color:#ef4444;color:#f87171;">&#x274C; Salir</button>
+    <div class="topbar-right">
+      <div class="stat-pill">Hoy: <span id="stat-hoy">—</span></div>
+      <div class="stat-pill">Total: <span id="stat-total">—</span></div>
+      <div class="stat-pill">Uptime: <span id="stat-uptime">—</span></div>
+      <button class="logout-btn" onclick="logout()">Salir</button>
     </div>
   </div>
 
-  <div class="container">
-    <div class="grid" id="stats-grid"></div>
-
-    <div id="resumen-diario-container"></div>
-
-    <div class="panels">
-      <div class="panel">
-        <div class="panel-header">
-          <span>Reportes recientes</span>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <input type="text" id="search-input" placeholder="Buscar ubicación, ruta, palabra..." style="background:#0f172a;border:1px solid #475569;color:#e2e8f0;padding:5px 10px;border-radius:6px;font-size:12px;width:220px;outline:none;" oninput="onSearch()" />
-            <button class="sound-toggle" onclick="exportCSV()" title="Descargar CSV">&#x1F4E5; CSV</button>
-          </div>
-        </div>
-        <div class="panel-header" style="padding:8px 20px;border-bottom:1px solid #334155;">
-          <div class="filter-bar">
-            <button class="filter-btn active" onclick="setFilter('todos')">Todos</button>
-            <button class="filter-btn" onclick="setFilter('alta')">Alta</button>
-            <button class="filter-btn" onclick="setFilter('media')">Media</button>
-            <button class="filter-btn" onclick="setFilter('whatsapp')">WA</button>
-            <button class="filter-btn" onclick="setFilter('scraping')">Scraping</button>
-          </div>
-        </div>
-        <div class="panel-body" id="reportes-list">Cargando...</div>
-      </div>
-
-      <div>
-        <div class="panel" style="margin-bottom: 16px;">
-          <div class="panel-header">WhatsApp</div>
-          <div class="panel-body qr-section" id="qr-section">Cargando...</div>
-        </div>
-        <div class="panel">
-          <div class="panel-header">Incidentes por tipo</div>
-          <div class="panel-body" style="padding:16px 20px" id="tipos-chart"></div>
-        </div>
-      </div>
+  <!-- Panel izquierdo: reportes procesados por IA -->
+  <div class="panel-reportes">
+    <div class="panel-header">
+      <h2>Reportes procesados por IA</h2>
+      <button onclick="exportarCSV()" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:5px 10px;border-radius:6px;font-size:11px;cursor:pointer;">⬇ CSV</button>
+    </div>
+    <div class="filtros">
+      <select class="filtro-select" id="filtro-tipo" onchange="cargarReportes(1)">
+        <option value="todos">Todos los tipos</option>
+        <option value="robo_de_carga">Robo de carga</option>
+        <option value="asalto">Asalto</option>
+        <option value="tentativa">Tentativa</option>
+        <option value="bloqueo">Bloqueo</option>
+        <option value="alerta">Alerta</option>
+        <option value="accidente">Accidente</option>
+      </select>
+      <select class="filtro-select" id="filtro-gravedad" onchange="cargarReportes(1)">
+        <option value="todos">Todas las gravedades</option>
+        <option value="alta">Alta</option>
+        <option value="media">Media</option>
+        <option value="baja">Baja</option>
+      </select>
+      <input class="busqueda-input" id="filtro-busqueda" placeholder="Buscar ubicación, ruta, descripción..." oninput="debounceSearch()" />
+    </div>
+    <div class="resumen-box" id="resumen-box" style="display:none">
+      <div class="resumen-label">Resumen IA del día</div>
+      <p id="resumen-texto">Cargando...</p>
+    </div>
+    <div class="reportes-list" id="reportes-list"></div>
+    <div class="paginacion" id="paginacion" style="display:none">
+      <button class="pag-btn" id="pag-prev" onclick="cambiarPagina(-1)">← Anterior</button>
+      <span class="pag-info" id="pag-info"></span>
+      <button class="pag-btn" id="pag-next" onclick="cambiarPagina(1)">Siguiente →</button>
     </div>
   </div>
 
-  <script>
-    // Auth: verificar token
-    const TOKEN = localStorage.getItem('varone_token');
-    if (!TOKEN) { window.location.href = '/login'; }
-    function authFetch(url) {
-      return fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(r => {
-        if (r.status === 401) { localStorage.removeItem('varone_token'); window.location.href = '/login'; }
-        return r;
-      });
+  <!-- Panel derecho: chat en tiempo real del grupo -->
+  <div class="panel-chat">
+    <div class="chat-header">
+      <h2>💬 Grupo en vivo</h2>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span id="chat-conn-label" style="font-size:11px;color:#475569;">Sin conexión</span>
+        <div class="chat-conn-dot" id="chat-conn-dot"></div>
+      </div>
+    </div>
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-empty" id="chat-empty">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <p>Esperando mensajes del grupo...</p>
+      </div>
+    </div>
+    <div class="chat-count" id="chat-count">0 mensajes recibidos</div>
+  </div>
+</div>
+
+<!-- QR Modal -->
+<div class="qr-overlay" id="qr-overlay" style="display:none">
+  <div class="qr-card">
+    <h3>Escanear código QR</h3>
+    <p>Abrí WhatsApp → Dispositivos vinculados → Vincular dispositivo</p>
+    <img id="qr-img" src="" alt="QR Code" />
+    <br><button class="qr-close" onclick="document.getElementById('qr-overlay').style.display='none'">Cerrar</button>
+  </div>
+</div>
+
+<script>
+  const token = localStorage.getItem('varone_token');
+  if (!token) { window.location.href = '/login'; }
+  else { document.getElementById('app').style.display = 'grid'; init(); }
+
+  let paginaActual = 1;
+  let searchTimer = null;
+  let msgCount = 0;
+  let autoScroll = true;
+  let sseSource = null;
+
+  function authHeaders() { return { 'Authorization': 'Bearer ' + token }; }
+
+  async function apiFetch(url) {
+    const r = await fetch(url, { headers: authHeaders() });
+    if (r.status === 401) { localStorage.removeItem('varone_token'); window.location.href = '/login'; }
+    return r.json();
+  }
+
+  function logout() {
+    localStorage.removeItem('varone_token');
+    window.location.href = '/login';
+  }
+
+  // ── STATS ──────────────────────────────────────────────
+  async function cargarStats() {
+    const d = await apiFetch('/api/stats');
+    document.getElementById('stat-hoy').textContent = d.hoy ?? '—';
+    document.getElementById('stat-total').textContent = d.total ?? '—';
+    const waBadge = document.getElementById('wa-badge');
+    if (d.waStatus === 'connected') {
+      waBadge.textContent = 'WA Conectado'; waBadge.className = 'topbar-badge badge-live';
+    } else if (d.waStatus === 'qr') {
+      waBadge.textContent = 'Escanear QR'; waBadge.className = 'topbar-badge badge-warn';
+      cargarQR();
+    } else {
+      waBadge.textContent = 'WA Desconectado'; waBadge.className = 'topbar-badge badge-off';
+    }
+  }
+
+  async function cargarMetrics() {
+    const d = await apiFetch('/api/metrics');
+    document.getElementById('stat-uptime').textContent = d.uptime ?? '—';
+  }
+
+  async function cargarQR() {
+    const d = await apiFetch('/api/qr');
+    if (d.qr) {
+      document.getElementById('qr-img').src = d.qr;
+      document.getElementById('qr-overlay').style.display = 'flex';
+    }
+  }
+
+  // ── REPORTES ───────────────────────────────────────────
+  function gravColor(g) {
+    if (g === 'alta') return 'grav-alta';
+    if (g === 'media') return 'grav-media';
+    return 'grav-baja';
+  }
+  function gravLabel(g) {
+    if (g === 'alta') return '🔴 Alta';
+    if (g === 'media') return '🟡 Media';
+    return '🟢 Baja';
+  }
+  function tipoLabel(t) {
+    const m = { robo_de_carga:'Robo de carga', asalto:'Asalto', tentativa:'Tentativa', bloqueo:'Bloqueo', alerta:'Alerta', accidente:'Accidente' };
+    return m[t] || t;
+  }
+  function fmtFecha(iso) {
+    return new Date(iso).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  }
+
+  async function cargarReportes(pag) {
+    paginaActual = pag || paginaActual;
+    const tipo = document.getElementById('filtro-tipo').value;
+    const gravedad = document.getElementById('filtro-gravedad').value;
+    const busqueda = document.getElementById('filtro-busqueda').value;
+    let url = '/api/reportes?pagina=' + paginaActual + '&porPagina=20';
+    if (tipo !== 'todos') url += '&tipo=' + encodeURIComponent(tipo);
+    if (gravedad !== 'todos') url += '&gravedad=' + encodeURIComponent(gravedad);
+    if (busqueda) url += '&busqueda=' + encodeURIComponent(busqueda);
+
+    const d = await apiFetch(url);
+    const list = document.getElementById('reportes-list');
+
+    if (!d.reportes?.length) {
+      list.innerHTML = '<div style="text-align:center;color:#475569;padding:40px;font-size:13px;">Sin reportes para los filtros seleccionados.</div>';
+      document.getElementById('paginacion').style.display = 'none';
+      return;
     }
 
-    function logout() { localStorage.removeItem('varone_token'); window.location.href = '/login'; }
+    list.innerHTML = d.reportes.map(r => \`
+      <div class="reporte-card \${r.gravedad || ''}">
+        <div class="rc-header">
+          <span class="rc-tipo">\${tipoLabel(r.tipoIncidente)}</span>
+          \${r.gravedad ? \`<span class="rc-gravedad \${gravColor(r.gravedad)}">\${gravLabel(r.gravedad)}</span>\` : ''}
+          <span class="rc-ubicacion">\${r.ubicacion}</span>
+        </div>
+        \${r.ruta && r.ruta !== 'no especificada' ? \`<div class="rc-ruta">📍 \${r.ruta}</div>\` : ''}
+        <div class="rc-desc">\${r.descripcion}</div>
+        <div class="rc-meta">
+          <span>\${fmtFecha(r.creadoEn)}</span>
+          <span style="color:\${r.framerEnviado ? '#4ade80' : '#f87171'}">\${r.framerEnviado ? '✓ Framer' : '✗ Pendiente'}</span>
+        </div>
+      </div>
+    \`).join('');
 
-    const COLORS = { 'robo de carga': '#f87171', 'asalto': '#fb923c', 'bloqueo': '#facc15', 'alerta': '#60a5fa', 'tentativa': '#c084fc' };
-    let currentFilter = 'todos';
-    let lastReporteCount = 0;
-    let soundEnabled = false;
-    let notifEnabled = false;
-    let searchQuery = '';
-    let allReportes = [];
-    let prevStats = {};
-
-    // Counter animation
-    function animateCount(el, target) {
-      const start = parseInt(el.textContent) || 0;
-      if (start === target) return;
-      const duration = 800;
-      const startTime = performance.now();
-      function step(now) {
-        const progress = Math.min((now - startTime) / duration, 1);
-        const ease = 1 - Math.pow(1 - progress, 3); // easeOutCubic
-        el.textContent = Math.round(start + (target - start) * ease);
-        if (progress < 1) requestAnimationFrame(step);
-      }
-      requestAnimationFrame(step);
+    const totalPag = d.totalPaginas || 1;
+    if (totalPag > 1) {
+      document.getElementById('paginacion').style.display = 'flex';
+      document.getElementById('pag-info').textContent = 'Página ' + paginaActual + ' de ' + totalPag + ' (' + d.total + ' reportes)';
+      document.getElementById('pag-prev').disabled = paginaActual <= 1;
+      document.getElementById('pag-next').disabled = paginaActual >= totalPag;
+    } else {
+      document.getElementById('paginacion').style.display = 'none';
     }
+  }
 
-    // Reloj en vivo
-    function updateClock() {
-      const now = new Date();
-      document.getElementById('clock').textContent = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
+  function cambiarPagina(delta) { cargarReportes(paginaActual + delta); }
+  function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(() => cargarReportes(1), 400); }
 
-    // Sonido de alerta
-    function toggleSound() {
-      soundEnabled = !soundEnabled;
-      const btn = document.getElementById('sound-toggle');
-      btn.className = 'sound-toggle' + (soundEnabled ? ' active' : '');
-      btn.innerHTML = (soundEnabled ? '&#x1F514;' : '&#x1F515;') + ' Alertas';
-    }
-    function playAlert() {
-      if (!soundEnabled) return;
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = 880; osc.type = 'sine';
-        gain.gain.setValueAtTime(0.3, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-        osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.5);
-      } catch(e) {}
-    }
+  function exportarCSV() {
+    const tipo = document.getElementById('filtro-tipo').value;
+    const gravedad = document.getElementById('filtro-gravedad').value;
+    const busqueda = document.getElementById('filtro-busqueda').value;
+    let url = '/api/exportar?token=' + token;
+    if (tipo !== 'todos') url += '&tipo=' + encodeURIComponent(tipo);
+    if (gravedad !== 'todos') url += '&gravedad=' + encodeURIComponent(gravedad);
+    if (busqueda) url += '&busqueda=' + encodeURIComponent(busqueda);
+    window.open(url, '_blank');
+  }
 
-    function tipoClass(tipo) {
-      if (tipo.includes('robo')) return 'tipo-robo';
-      if (tipo.includes('asalto')) return 'tipo-asalto';
-      if (tipo.includes('bloqueo')) return 'tipo-bloqueo';
-      if (tipo.includes('alerta')) return 'tipo-alerta';
-      if (tipo.includes('tentativa')) return 'tipo-tentativa';
-      return 'tipo-alerta';
-    }
+  // ── RESUMEN IA ──────────────────────────────────────────
+  async function cargarResumen() {
+    const box = document.getElementById('resumen-box');
+    const txt = document.getElementById('resumen-texto');
+    box.style.display = 'block';
+    txt.textContent = 'Generando resumen...';
+    const d = await apiFetch('/api/resumen-diario');
+    txt.textContent = d.resumen || '—';
+  }
 
-    function formatTimestamp(date) {
-      const d = new Date(date);
-      const hoy = new Date();
-      const isHoy = d.toDateString() === hoy.toDateString();
-      const time = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-      if (isHoy) return 'Hoy ' + time;
-      const ayer = new Date(hoy); ayer.setDate(ayer.getDate() - 1);
-      if (d.toDateString() === ayer.toDateString()) return 'Ayer ' + time;
-      return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }) + ' ' + time;
-    }
+  // ── SSE — CHAT EN TIEMPO REAL ───────────────────────────
+  function conectarSSE() {
+    const dot = document.getElementById('chat-conn-dot');
+    const label = document.getElementById('chat-conn-label');
 
-    function timeAgo(date) {
-      const mins = Math.floor((Date.now() - new Date(date).getTime()) / 60000);
-      if (mins < 1) return 'ahora';
-      if (mins < 60) return 'hace ' + mins + ' min';
-      const hrs = Math.floor(mins / 60);
-      if (hrs < 24) return 'hace ' + hrs + 'h';
-      return 'hace ' + Math.floor(hrs / 24) + 'd';
-    }
+    if (sseSource) sseSource.close();
 
-    function setFilter(filter) {
-      currentFilter = filter;
-      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-      event.target.classList.add('active');
-      renderReportes();
-    }
+    sseSource = new EventSource('/api/mensajes/stream?token=' + token);
 
-    function buildShareWA(r) {
-      const desc = r.descripcion.length > 200 ? r.descripcion.substring(0, 197) + '...' : r.descripcion;
-      const urlLine = r.urlNoticia ? String.fromCodePoint(0x1F517) + ' ' + r.urlNoticia : '';
-      const parts = [
-        String.fromCodePoint(0x1F6A8) + ' ALERTA SEGURIDAD VIAL',
-        'Tipo: ' + r.tipoIncidente + ' | Gravedad: ' + (r.gravedad || 'N/A'),
-        String.fromCodePoint(0x1F4CD) + ' ' + r.ubicacion + ' — ' + r.ruta,
-        desc,
-        urlLine,
-        '— Sistema Varone'
-      ].filter(Boolean).join(String.fromCharCode(10));
-      const encoded = encodeURIComponent(parts);
-      return '<a class="btn-share-wa" href="https://wa.me/?text=' + encoded + '" target="_blank" title="Compartir por WhatsApp"><span class="wa-icon">&#x1F4F2;</span>Compartir</a>';
-    }
+    sseSource.onopen = () => {
+      dot.classList.add('connected');
+      label.textContent = 'En vivo';
+      label.style.color = '#4ade80';
+    };
 
-    function onSearch() {
-      searchQuery = document.getElementById('search-input').value.toLowerCase().trim();
-      renderReportes();
-    }
+    sseSource.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      agregarMensaje(msg);
+    };
 
-    function renderReportes() {
-      const el = document.getElementById('reportes-list');
-      let filtered = allReportes;
-      if (currentFilter === 'alta') filtered = allReportes.filter(r => r.gravedad === 'alta');
-      else if (currentFilter === 'media') filtered = allReportes.filter(r => r.gravedad === 'media');
-      else if (currentFilter === 'whatsapp') filtered = allReportes.filter(r => r.fuente === 'whatsapp');
-      else if (currentFilter === 'scraping') filtered = allReportes.filter(r => r.fuente === 'scraping');
+    sseSource.onerror = () => {
+      dot.classList.remove('connected');
+      label.textContent = 'Reconectando...';
+      label.style.color = '#f59e0b';
+      // EventSource reconecta automáticamente
+    };
+  }
 
-      if (searchQuery) {
-        filtered = filtered.filter(r =>
-          (r.ubicacion || '').toLowerCase().includes(searchQuery) ||
-          (r.ruta || '').toLowerCase().includes(searchQuery) ||
-          (r.descripcion || '').toLowerCase().includes(searchQuery) ||
-          (r.tipoIncidente || '').toLowerCase().includes(searchQuery)
-        );
-      }
+  function agregarMensaje(msg) {
+    const container = document.getElementById('chat-messages');
+    const empty = document.getElementById('chat-empty');
+    if (empty) empty.style.display = 'none';
 
-      if (filtered.length === 0) {
-        el.innerHTML = '<p style="color:#64748b;text-align:center;padding:32px">No hay reportes con este filtro</p>';
-        return;
-      }
+    const isMultimedia = msg.type !== 'chat';
+    const hora = new Date(msg.timestamp * 1000).toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' });
+    const body = isMultimedia ? msg.body : escapeHtml(msg.body);
 
-      el.innerHTML = filtered.map((r, i) => {
-        const isNew = (Date.now() - new Date(r.creadoEn).getTime()) < 300000; // menos de 5 min
-        const gravedadClass = r.gravedad ? 'gravedad-' + r.gravedad : '';
-        const gravedadBadge = r.gravedad ? '<span class="badge-gravedad badge-gravedad-' + r.gravedad + '">' + r.gravedad + '</span>' : '';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble msg-new';
+    bubble.innerHTML = \`
+      <div class="msg-name">\${escapeHtml(msg.fromName)}</div>
+      <div class="msg-text \${isMultimedia ? 'multimedia' : ''}">\${body}</div>
+      <div class="msg-time">\${hora}</div>
+    \`;
+    container.appendChild(bubble);
 
-        let portalLabel = '';
-        if (r.urlNoticia) {
-          try { portalLabel = '<span class="portal-name">' + new URL(r.urlNoticia).hostname.replace('www.', '') + '</span>'; } catch(e) {}
-        }
+    // Limitar a 200 mensajes para no saturar el DOM
+    const bubbles = container.querySelectorAll('.msg-bubble');
+    if (bubbles.length > 200) bubbles[0].remove();
 
-        let detailParts = [];
-        if (r.vehiculo) detailParts.push('<span>&#x1F698; ' + r.vehiculo + '</span>');
-        if (r.victimas) detailParts.push('<span>&#x1F6A8; ' + r.victimas + '</span>');
-        if (r.detenidos) detailParts.push('<span>&#x1F46E; ' + r.detenidos + '</span>');
-        const detailRow = detailParts.length > 0 ? '<div class="detail-row">' + detailParts.join('') + '</div>' : '';
+    msgCount++;
+    document.getElementById('chat-count').textContent = msgCount + ' mensaje' + (msgCount !== 1 ? 's' : '') + ' recibido' + (msgCount !== 1 ? 's' : '');
 
-        const urlLink = r.urlNoticia
-          ? '<a class="url-link" href="' + r.urlNoticia + '" target="_blank">Ver fuente original &#x2192;</a>'
-          : '';
+    // Auto-scroll solo si el usuario está al final
+    if (autoScroll) container.scrollTop = container.scrollHeight;
+  }
 
-        return '<div class="reporte ' + gravedadClass + '">' +
-          '<div class="reporte-header">' +
-            (isNew ? '<span class="badge-nuevo">NUEVO</span>' : '') +
-            '<span class="tipo ' + tipoClass(r.tipoIncidente) + '">' + r.tipoIncidente + '</span>' +
-            gravedadBadge +
-            '<span class="badge-fuente ' + (r.fuente === 'whatsapp' ? 'badge-wa' : 'badge-scraping') + '">' + r.fuente + '</span>' +
-            portalLabel +
-          '</div>' +
-          '<div class="ubicacion-line"><strong>' + r.ubicacion + '</strong> &#x2014; ' + r.ruta + '</div>' +
-          '<div class="desc">' + r.descripcion + '</div>' +
-          detailRow +
-          '<div class="meta"><span class="timestamp">' + formatTimestamp(r.creadoEn) + ' (' + timeAgo(r.creadoEn) + ')</span><span style="display:flex;gap:8px;align-items:center">' + urlLink + buildShareWA(r) + '</span></div>' +
-        '</div>';
-      }).join('');
-    }
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
 
-    async function loadStats() {
-      const res = await authFetch('/api/stats');
-      const data = await res.json();
+  // Detectar si el usuario scrolleó hacia arriba (deshabilitar auto-scroll)
+  document.addEventListener('DOMContentLoaded', () => {
+    const c = document.getElementById('chat-messages');
+    if (c) c.addEventListener('scroll', () => {
+      autoScroll = c.scrollHeight - c.scrollTop - c.clientHeight < 60;
+    });
+  });
 
-      document.getElementById('wa-dot').className = 'status-dot ' + (data.waStatus === 'connected' ? 'green' : data.waStatus === 'qr' ? 'yellow' : 'red');
-      document.getElementById('wa-status').textContent = data.waStatus === 'connected' ? 'OK' : data.waStatus === 'qr' ? 'QR' : 'Off';
-      document.getElementById('scraping-status').textContent = data.scrapingStatus;
-
-      const altaCount = data.porGravedad?.find(g => g.gravedad === 'alta')?.count || 0;
-
-      const waCount = data.porFuente.find(f => f.fuente === 'whatsapp')?.count || 0;
-      const scrapCount = data.porFuente.find(f => f.fuente === 'scraping')?.count || 0;
-      const statsEl = document.getElementById('stats-grid');
-      // Crear estructura solo la primera vez
-      if (!statsEl.dataset.init) {
-        statsEl.dataset.init = '1';
-        statsEl.innerHTML =
-          '<div class="card"><h3>Total reportes</h3><div class="value blue" id="stat-total">0</div><div class="sub">desde el inicio</div></div>' +
-          '<div class="card"><h3>Hoy</h3><div class="value green" id="stat-hoy">0</div><div class="sub">' + new Date().toLocaleDateString('es-AR') + '</div></div>' +
-          '<div class="card"><h3>Gravedad alta</h3><div class="value red" id="stat-alta">0</div><div class="sub">requieren atención</div></div>' +
-          '<div class="card"><h3>Via WhatsApp</h3><div class="value orange" id="stat-wa">0</div><div class="sub">tiempo real</div></div>' +
-          '<div class="card"><h3>Via scraping</h3><div class="value yellow" id="stat-scrap">0</div><div class="sub">5 portales</div></div>';
-      }
-      animateCount(document.getElementById('stat-total'), data.total);
-      animateCount(document.getElementById('stat-hoy'), data.hoy);
-      animateCount(document.getElementById('stat-alta'), altaCount);
-      animateCount(document.getElementById('stat-wa'), waCount);
-      animateCount(document.getElementById('stat-scrap'), scrapCount);
-
-      const maxCount = Math.max(...data.porTipo.map(t => t.count), 1);
-      document.getElementById('tipos-chart').innerHTML = data.porTipo.map(t =>
-        '<div class="tipo-bar"><span class="label">' + t.tipo + '</span><div class="bar"><div class="fill" style="width:' + (t.count / maxCount * 100) + '%;background:' + (COLORS[t.tipo] || '#60a5fa') + '"></div></div><span style="font-size:13px;color:#e2e8f0;width:30px;text-align:right">' + t.count + '</span></div>'
-      ).join('') || '<p style="color:#64748b">Sin datos</p>';
-    }
-
-    async function loadReportes() {
-      const res = await authFetch('/api/reportes');
-      const reportes = await res.json();
-
-      // Detectar nuevos reportes para alerta sonora y notificación
-      if (lastReporteCount > 0 && reportes.length > lastReporteCount) {
-        const nuevos = reportes.length - lastReporteCount;
-        playAlert();
-        sendNotification(nuevos, reportes[0]);
-        document.title = '(' + nuevos + ') NUEVO - Sistema Varone';
-        setTimeout(() => { document.title = 'Sistema Varone - Monitor en Vivo'; }, 10000);
-      }
-      lastReporteCount = reportes.length;
-
-      allReportes = reportes;
-      renderReportes();
-    }
-
-    async function loadQR() {
-      const res = await authFetch('/api/qr');
-      const data = await res.json();
-      const el = document.getElementById('qr-section');
-
-      if (data.status === 'connected') {
-        el.innerHTML = '<div class="connected-box"><div class="icon">&#x1F4F1;</div><p class="connected-msg"><span class="pulse"></span>Conectado</p><p class="msg">Escuchando grupo de WhatsApp</p><p class="grupo">"' + (data.groupName || 'pirateria de camiones') + '"</p></div>';
-      } else if (data.qr) {
-        el.innerHTML = '<img src="' + data.qr + '" alt="QR WhatsApp"><p class="msg">Escanealo con WhatsApp</p>';
-      } else {
-        el.innerHTML = '<div class="disconnected-box"><div class="icon">&#x1F4F4;</div><p style="color:#ef4444;font-size:16px;font-weight:600">Desconectado</p><p class="msg">Esperando conexión de WhatsApp...</p></div>';
-      }
-    }
-
-    // Notificaciones del navegador
-    function toggleNotifications() {
-      const btn = document.getElementById('notif-toggle');
-      if (!notifEnabled) {
-        if (!('Notification' in window)) {
-          alert('Tu navegador no soporta notificaciones');
-          return;
-        }
-        Notification.requestPermission().then(perm => {
-          if (perm === 'granted') {
-            notifEnabled = true;
-            btn.className = 'sound-toggle active';
-            btn.innerHTML = '&#x1F4E8; Notif ON';
-          } else {
-            alert('Permiso de notificaciones denegado');
-          }
-        });
-      } else {
-        notifEnabled = false;
-        btn.className = 'sound-toggle';
-        btn.innerHTML = '&#x1F4E8; Notificaciones';
-      }
-    }
-
-    function sendNotification(count, latest) {
-      if (!notifEnabled || Notification.permission !== 'granted') return;
-      const title = count === 1 ? 'Nuevo reporte' : count + ' nuevos reportes';
-      const body = latest ? (latest.tipoIncidente.toUpperCase() + ' - ' + latest.ubicacion + ' (' + latest.ruta + ')') : '';
-      const n = new Notification(title, { body: body, icon: '&#x1F6A8;', tag: 'varone-alert' });
-      n.onclick = () => { window.focus(); n.close(); };
-    }
-
-    // Exportar CSV
-    function exportCSV() {
-      const params = new URLSearchParams();
-      if (currentFilter === 'whatsapp' || currentFilter === 'scraping') params.set('fuente', currentFilter);
-      if (currentFilter === 'alta' || currentFilter === 'media') params.set('gravedad', currentFilter);
-      if (searchQuery) params.set('busqueda', searchQuery);
-      params.set('token', TOKEN);
-      window.open('/api/exportar?' + params.toString(), '_blank');
-    }
-
-    let resumenLoaded = false;
-    async function loadResumen() {
-      if (resumenLoaded) return; // Solo cargar una vez (se cachea server-side 10min)
-      const el = document.getElementById('resumen-diario-container');
-      el.innerHTML = '<div class="resumen-card"><div class="resumen-header"><span class="resumen-icon">&#x1F4CA;</span> Resumen del d&#xED;a</div><div class="resumen-loading">Generando resumen con IA...</div></div>';
-      try {
-        const res = await authFetch('/api/resumen-diario');
-        const data = await res.json();
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-        el.innerHTML = '<div class="resumen-card"><div class="resumen-header"><span class="resumen-icon">&#x1F4CA;</span> Resumen ejecutivo</div><div class="resumen-text">' + data.resumen + '</div><div class="resumen-meta">Generado a las ' + timeStr + (data.cached ? ' (cacheado)' : ' con IA') + '</div></div>';
-        resumenLoaded = true;
-      } catch(e) {
-        el.innerHTML = '';
-      }
-    }
-
-    async function refresh() {
-      await Promise.all([loadStats(), loadReportes(), loadQR()]);
-    }
-
-    refresh();
-    loadResumen();
-    setInterval(refresh, 5000);
-    // Refrescar resumen cada 10 minutos
-    setInterval(() => { resumenLoaded = false; loadResumen(); }, 600000);
-  </script>
+  // ── INIT ───────────────────────────────────────────────
+  function init() {
+    cargarStats();
+    cargarMetrics();
+    cargarReportes(1);
+    cargarResumen();
+    conectarSSE();
+    // Refresh de stats y reportes cada 30s
+    setInterval(() => { cargarStats(); cargarMetrics(); }, 30_000);
+    setInterval(() => cargarReportes(paginaActual), 30_000);
+  }
+</script>
 </body>
 </html>`;
+
