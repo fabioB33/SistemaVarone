@@ -4,6 +4,7 @@ import { enviarAFramer } from './framer';
 import { incrementarMetrica, emitirEstadoProcesado } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
 import { ENV } from '../config/env';
+import logger from './logger';
 
 // F2: detectar spike — si entran N reportes relevantes en una ventana de tiempo, alertar
 const SPIKE_VENTANA_MS = 10 * 60 * 1000;  // 10 minutos
@@ -20,7 +21,7 @@ async function verificarSpike(): Promise<void> {
 
   if (timestampsRecientes.length === SPIKE_UMBRAL) {
     const msg = `🚨 *Sistema Varone — Spike detectado*\n${SPIKE_UMBRAL} reportes en los últimos 10 minutos.\nPosible incidente activo en curso.`;
-    console.warn(`[Pipeline] ${msg}`);
+    logger.warn(`[Pipeline] ${msg}`);
     const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
     const telegramChatId = process.env.TELEGRAM_CHAT_ID;
     if (telegramToken && telegramChatId) {
@@ -35,6 +36,40 @@ async function verificarSpike(): Promise<void> {
 
 const PIPELINE_TIMEOUT_MS = 30_000;
 const URL_FETCH_TIMEOUT_MS = 10_000;
+
+// Cola FIFO para procesar mensajes de a uno — evita rate limit cuando llegan ráfagas
+type ColaItem = { texto: string; fuente: 'whatsapp' | 'scraping'; urlNoticia?: string; portalOrigen?: string; waMsgId?: string };
+const cola: ColaItem[] = [];
+let colaCorreindo = false;
+
+async function procesarCola(): Promise<void> {
+  if (colaCorreindo) return;
+  colaCorreindo = true;
+  while (cola.length > 0) {
+    const item = cola.shift()!;
+    await _procesarTexto(item.texto, item.fuente, item.urlNoticia, item.portalOrigen, item.waMsgId)
+      .catch(err => logger.error('[Pipeline] Error en item de cola:', err));
+  }
+  colaCorreindo = false;
+}
+
+// Palabras clave del dominio — si el texto no contiene ninguna, descartarlo sin gastar quota de IA.
+// Se aplica SOLO a mensajes de texto cortos (< 300 chars). Textos largos o URLs siempre pasan.
+const KEYWORDS_DOMINIO = [
+  'camion', 'camión', 'camiones', 'carga', 'flete', 'fletero', 'chofer', 'choferes',
+  'robo', 'asalto', 'pirat', 'banda', 'delincuent', 'malvivient',
+  'ruta', 'autopista', 'autovia', 'autovía', 'acceso', 'km ', 'kilómetro', 'kilometro',
+  'arma', 'fierro', 'disparo', 'baleado', 'herido',
+  'detenido', 'aprehendido', 'capturado', 'polic',
+  'tentativa', 'intento', 'sospechoso', 'sospechosa', 'moto', 'motocicleta',
+  'mercadería', 'mercaderia', 'contenedor', 'trailer', 'semirremolque',
+  'blindado', 'remolque', 'acoplado', 'patente', 'ptte',
+];
+
+function tieneKeywordDominio(texto: string): boolean {
+  const lower = texto.toLowerCase();
+  return KEYWORDS_DOMINIO.some(kw => lower.includes(kw));
+}
 
 const URL_REGEX = /^https?:\/\/\S+$/;
 
@@ -96,15 +131,31 @@ function conTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<
  * 3. Lo envía a la IA para clasificar y estructurar
  * 4. Si es nuevo y relevante, lo registra y lo envía a Framer
  */
-export async function procesarTexto(
+
+/**
+ * Encola el texto para procesamiento secuencial.
+ * Evita lanzar N llamadas a la IA en paralelo cuando llegan ráfagas de mensajes.
+ */
+export function procesarTexto(
   texto: string,
   fuente: 'whatsapp' | 'scraping',
   urlNoticia?: string,
   portalOrigen?: string,
-  waMsgId?: string   // id del mensaje de WhatsApp para actualizar el indicador en el chat
-): Promise<void> {
+  waMsgId?: string
+): void {
   if (texto.trim().length < 15) return;
+  cola.push({ texto, fuente, urlNoticia, portalOrigen, waMsgId });
+  logger.info(`[Pipeline] Encolado (cola: ${cola.length}). Fuente: ${fuente}`);
+  procesarCola();
+}
 
+async function _procesarTexto(
+  texto: string,
+  fuente: 'whatsapp' | 'scraping',
+  urlNoticia?: string,
+  portalOrigen?: string,
+  waMsgId?: string
+): Promise<void> {
   try {
     incrementarMetrica('textosTotales');
 
@@ -112,6 +163,15 @@ export async function procesarTexto(
     const enriquecido = await enriquecerSiEsUrl(texto, urlNoticia);
     texto = enriquecido.texto;
     if (enriquecido.url) urlNoticia = enriquecido.url;
+
+    // Pre-filtro léxico: descartar sin llamar a la IA si el texto corto no tiene keywords del dominio.
+    // Textos largos (>300 chars) siempre pasan — pueden ser reportes formales o artículos.
+    if (texto.length < 300 && !tieneKeywordDominio(texto)) {
+      incrementarMetrica('noRelevantesDescartados');
+      console.log('[Pipeline] Descartado por pre-filtro léxico (sin keywords de dominio).');
+      if (waMsgId) emitirEstadoProcesado(waMsgId, false);
+      return;
+    }
 
     // Verificar duplicado antes de llamar a la IA para ahorrar quota de API (por hash y por URL)
     const esDuplicado = await existeDuplicado(texto, urlNoticia);

@@ -1,3 +1,4 @@
+import logger from './logger';
 import crypto from 'crypto';
 import prisma from './prisma';
 
@@ -47,7 +48,7 @@ export async function registrarReporte(texto: string, datos: Record<string, unkn
     },
   });
 
-  console.log(`[Dedup] Reporte registrado (hash: ${hash.substring(0, 12)}...)`);
+  logger.info(`[Dedup] Reporte registrado (hash: ${hash.substring(0, 12)}...)`);
   return reporte.id;
 }
 

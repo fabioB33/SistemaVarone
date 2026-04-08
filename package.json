@@ -32,7 +32,9 @@
     "qrcode-terminal": "^0.12.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "whatsapp-web.js": "^1.34.6"
+    "whatsapp-web.js": "^1.34.6",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

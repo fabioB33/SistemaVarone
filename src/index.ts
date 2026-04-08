@@ -4,6 +4,7 @@ import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
 import { enviarHealthcheck } from './services/healthcheck';
+import logger from './services/logger';
 
 // Validar variables de entorno críticas antes de arrancar
 const erroresEnv: string[] = [];
@@ -56,7 +57,7 @@ async function conectarDB(intentos = 3): Promise<void> {
       return;
     } catch (err) {
       const espera = Math.pow(2, i) * 1000;
-      console.error(`[DB] Intento ${i}/${intentos} fallido. Reintentando en ${espera / 1000}s...`);
+      logger.error(`[DB] Intento ${i}/${intentos} fallido. Reintentando en ${espera / 1000}s...`);
       if (i === intentos) throw err;
       await new Promise(r => setTimeout(r, espera));
     }
@@ -96,7 +97,7 @@ async function shutdown(signal: string) {
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('unhandledRejection', (err) => {
-  console.error('[Sistema] Unhandled rejection:', err);
+  logger.error('[Sistema] Unhandled rejection:', err);
 });
 
 main();

@@ -1,3 +1,4 @@
+import logger from '../services/logger';
 import { Client, LocalAuth, Message } from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { MensajeWhatsApp } from '../types';
@@ -43,11 +44,11 @@ async function procesarHistorialGrupo(): Promise<void> {
     const grupo = chats.find(c => c.isGroup && c.name === ENV.WA_GROUP_NAME);
 
     if (!grupo) {
-      console.warn(`[WhatsApp] Grupo "${ENV.WA_GROUP_NAME}" no encontrado al reconectar.`);
+      logger.warn(`[WhatsApp] Grupo "${ENV.WA_GROUP_NAME}" no encontrado al reconectar.`);
       return;
     }
 
-    console.log(`[WhatsApp] Procesando historial del grupo "${grupo.name}"...`);
+    logger.info(`[WhatsApp] Procesando historial del grupo "${grupo.name}"...`);
     const mensajes = await grupo.fetchMessages({ limit: 50 });
 
     let procesados = 0;
@@ -62,9 +63,9 @@ async function procesarHistorialGrupo(): Promise<void> {
       procesados++;
     }
 
-    console.log(`[WhatsApp] Historial procesado: ${procesados} mensajes recientes analizados.`);
+    logger.info(`[WhatsApp] Historial procesado: ${procesados} mensajes recientes analizados.`);
   } catch (error) {
-    console.error('[WhatsApp] Error procesando historial:', error);
+    logger.error('[WhatsApp] Error procesando historial:', error);
   }
 }
 
@@ -78,13 +79,13 @@ export function iniciarWhatsApp(): void {
   });
 
   client.on('qr', (qr) => {
-    console.log('[WhatsApp] Escaneá este código QR:');
+    logger.info('[WhatsApp] Escaneá este código QR:');
     qrcode.generate(qr, { small: true });
     setQrData(qr);
   });
 
   client.on('ready', async () => {
-    console.log('[WhatsApp] Conectado y escuchando mensajes...');
+    logger.info('[WhatsApp] Conectado y escuchando mensajes...');
     intentosReconexion = 0;
     setWaConnected();
     // Registrar el cliente para que el módulo de notificaciones pueda usarlo
@@ -125,35 +126,35 @@ export function iniciarWhatsApp(): void {
       });
 
       if (!dentroDeLimite(msg.from)) {
-        console.log(`[WhatsApp] Rate limit: ignorando mensaje de ${msg.from} (muy frecuente)`);
+        logger.info(`[WhatsApp] Rate limit: ignorando mensaje de ${msg.from} (muy frecuente)`);
         return;
       }
 
       // F4: loguear mensajes no-texto (fotos, audios, docs) para visibilidad
       if (msg.type !== 'chat') {
-        console.log(`[WhatsApp] Mensaje no-texto ignorado (tipo: ${msg.type}) de ${msg.from}`);
+        logger.info(`[WhatsApp] Mensaje no-texto ignorado (tipo: ${msg.type}) de ${msg.from}`);
         return;
       }
 
-      console.log(`[WhatsApp] Mensaje recibido en "${chat.name}": ${msg.body.substring(0, 80)}...`);
+      logger.info(`[WhatsApp] Mensaje recibido en "${chat.name}": ${msg.body.substring(0, 80)}...`);
       await procesarTexto(mensaje.body, 'whatsapp', undefined, undefined, msg.id.id);
     } catch (error) {
-      console.error('[WhatsApp] Error procesando mensaje:', error);
+      logger.error('[WhatsApp] Error procesando mensaje:', error);
     }
   });
 
   client.on('disconnected', async (reason) => {
-    console.warn('[WhatsApp] Desconectado:', reason);
+    logger.warn('[WhatsApp] Desconectado:', reason);
     setWaDisconnected();
     await notificarDesconexion(reason);
 
     intentosReconexion++;
     const espera = calcularEsperaReconexion();
-    console.log(`[WhatsApp] Reconexión intento ${intentosReconexion}/${RECONEXION_MAX_INTENTOS} en ${espera / 1000}s...`);
+    logger.info(`[WhatsApp] Reconexión intento ${intentosReconexion}/${RECONEXION_MAX_INTENTOS} en ${espera / 1000}s...`);
 
     if (intentosReconexion >= RECONEXION_MAX_INTENTOS) {
       const msg = `🚨 Sistema Varone — ALERTA CRÍTICA\nWhatsApp no pudo reconectar después de ${RECONEXION_MAX_INTENTOS} intentos.\nMotivo: ${reason}\nIntervención manual requerida.`;
-      console.error(`[WhatsApp] ${msg}`);
+      logger.error(`[WhatsApp] ${msg}`);
       await notificar(msg);
     }
 
@@ -161,10 +162,10 @@ export function iniciarWhatsApp(): void {
   });
 
   client.on('auth_failure', async (msg) => {
-    console.error('[WhatsApp] Error de autenticación:', msg);
+    logger.error('[WhatsApp] Error de autenticación:', msg);
     setWaDisconnected();
     const alerta = `🔐 *Sistema Varone — Error de autenticación*\nWhatsApp rechazó las credenciales guardadas.\nMotivo: ${msg}\n\nAcción requerida: detener el sistema, borrar la carpeta \`.wwebjs_auth/\` y reiniciar para escanear el QR nuevamente.`;
-    await notificar(alerta).catch(e => console.error('[WhatsApp] Error enviando alerta auth_failure:', e));
+    await notificar(alerta).catch(e => logger.error('[WhatsApp] Error enviando alerta auth_failure:', e));
   });
 
   client.initialize();
@@ -173,6 +174,6 @@ export function iniciarWhatsApp(): void {
 export function detenerWhatsApp(): void {
   if (client) {
     client.destroy();
-    console.log('[WhatsApp] Cliente detenido.');
+    logger.info('[WhatsApp] Cliente detenido.');
   }
 }

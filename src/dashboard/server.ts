@@ -335,13 +335,24 @@ export function startDashboard(port: number = 3000) {
     }
     const reportes = await prisma.reporte.findMany({ where, orderBy: { creadoEn: 'desc' } });
 
-    const header = 'Fecha,Hora,Ubicación,Ruta,Tipo,Gravedad,Fuente,Descripción,Víctimas,Detenidos,URL\n';
+    const header = 'Fecha,Hora incidente,Ubicación,Ruta,Tipo,Gravedad,Vehículo,Patente,Fuente,Descripción,Víctimas,Detenidos,URL\n';
     const rows = reportes.map(r => {
-      const creado = new Date(r.creadoEn);
-      const fecha = creado.toLocaleDateString('es-AR');
-      const hora = creado.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-      const esc = (s: string | null) => s ? '"' + s.replace(/"/g, '""') + '"' : '';
-      return [fecha, hora, esc(r.ubicacion), esc(r.ruta), esc(r.tipoIncidente), r.gravedad || '', r.fuente, esc(r.descripcion), esc(r.victimas), esc(r.detenidos), r.urlNoticia || ''].join(',');
+      const esc = (s: string | null | undefined) => s ? '"' + s.replace(/"/g, '""') + '"' : '';
+      return [
+        r.fecha,
+        r.hora || '',
+        esc(r.ubicacion),
+        esc(r.ruta),
+        esc(r.tipoIncidente),
+        r.gravedad || '',
+        esc(r.vehiculo),
+        r.patente || '',
+        r.fuente,
+        esc(r.descripcion),
+        esc(r.victimas),
+        esc(r.detenidos),
+        r.urlNoticia || '',
+      ].join(',');
     }).join('\n');
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -350,24 +361,28 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: resumen diario generado con IA (persiste en DB para sobrevivir reinicios)
-  let resumenCache: { texto: string; generadoEn: number } | null = null;
+  let resumenCache: { texto: string; generadoEn: number; reportesContados: number } | null = null;
   let resumenEnProgreso = false;
   const RESUMEN_TTL = 10 * 60 * 1000; // 10 minutos de cache en memoria
 
   app.get('/api/resumen-diario', async (_req, res) => {
     try {
-      // 1. Servir desde cache en memoria si es reciente
-      if (resumenCache && (Date.now() - resumenCache.generadoEn) < RESUMEN_TTL) {
+      const fechaHoy = new Date().toISOString().split('T')[0];
+      const inicioDia = new Date(); inicioDia.setHours(0, 0, 0, 0);
+      const reportesHoy = await prisma.reporte.count({ where: { creadoEn: { gte: inicioDia } } });
+
+      // 1. Servir desde cache si es reciente Y no llegaron reportes nuevos desde que se generó
+      if (resumenCache &&
+          (Date.now() - resumenCache.generadoEn) < RESUMEN_TTL &&
+          resumenCache.reportesContados >= reportesHoy) {
         res.json({ resumen: resumenCache.texto, cached: true });
         return;
       }
 
-      const fechaHoy = new Date().toISOString().split('T')[0];
-
-      // 2. Buscar en DB si ya se generó hoy (sobrevive reinicios del proceso)
+      // 2. Buscar en DB solo si no hay reportes nuevos desde la última generación
       const resumenDB = await prisma.resumenDiario.findUnique({ where: { fecha: fechaHoy } });
-      if (resumenDB) {
-        resumenCache = { texto: resumenDB.texto, generadoEn: Date.now() };
+      if (resumenDB && resumenCache && resumenCache.reportesContados >= reportesHoy) {
+        resumenCache = { texto: resumenDB.texto, generadoEn: Date.now(), reportesContados: reportesHoy };
         res.json({ resumen: resumenDB.texto, cached: true });
         return;
       }
@@ -438,7 +453,7 @@ export function startDashboard(port: number = 3000) {
         create: { fecha: fechaHoy, texto: resumenTexto },
       });
 
-      resumenCache = { texto: resumenTexto, generadoEn: Date.now() };
+      resumenCache = { texto: resumenTexto, generadoEn: Date.now(), reportesContados: reportesHoy };
       resumenEnProgreso = false;
       res.json({ resumen: resumenTexto, cached: false });
     } catch (error) {
