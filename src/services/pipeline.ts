@@ -147,7 +147,7 @@ export async function procesarTexto(
     const framerOk = await enviarAFramer(reporte, reporteId);
     incrementarMetrica(framerOk ? 'framerEnviados' : 'framerFallidos');
 
-    if (waMsgId) emitirEstadoProcesado(waMsgId, true);
+    if (waMsgId) emitirEstadoProcesado(waMsgId, true, { gravedad: reporte.gravedad, ubicacion: reporte.ubicacion });
     console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente})`);
   } catch (error) {
     console.error(`[Pipeline] Error procesando texto (${fuente}):`, error);
@@ -189,12 +189,14 @@ export async function reintentarFramerPendientes(): Promise<void> {
     for (const r of listos) {
       const reporte: Partial<ReporteIncidente> = {
         fecha: r.fecha,
-        hora: 'desconocida',
+        hora: r.hora ?? 'desconocida',
         ubicacion: r.ubicacion,
         ruta: r.ruta,
         tipoIncidente: r.tipoIncidente,
         gravedad: r.gravedad ?? undefined,
         descripcion: r.descripcion,
+        vehiculo: r.vehiculo ?? undefined,
+        patente: r.patente ?? undefined,
         fuente: r.fuente as 'whatsapp' | 'scraping',
         urlNoticia: r.urlNoticia ?? undefined,
         victimas: r.victimas ?? undefined,

@@ -16,6 +16,9 @@ model Reporte {
   ruta           String
   tipoIncidente  String   @map("tipo_incidente")
   gravedad       String?  // 'alta' | 'media' | 'baja'
+  hora           String?  // HH:MM o 'desconocida'
+  vehiculo       String?  // marca y tipo del vehículo
+  patente        String?  // patente del vehículo si aparece
   descripcion    String
   textoOriginal  String   @map("texto_original")
   urlNoticia     String?  @map("url_noticia")

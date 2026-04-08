@@ -160,8 +160,11 @@ export function iniciarWhatsApp(): void {
     setTimeout(() => client.initialize(), espera);
   });
 
-  client.on('auth_failure', (msg) => {
+  client.on('auth_failure', async (msg) => {
     console.error('[WhatsApp] Error de autenticación:', msg);
+    setWaDisconnected();
+    const alerta = `🔐 *Sistema Varone — Error de autenticación*\nWhatsApp rechazó las credenciales guardadas.\nMotivo: ${msg}\n\nAcción requerida: detener el sistema, borrar la carpeta \`.wwebjs_auth/\` y reiniciar para escanear el QR nuevamente.`;
+    await notificar(alerta).catch(e => console.error('[WhatsApp] Error enviando alerta auth_failure:', e));
   });
 
   client.initialize();

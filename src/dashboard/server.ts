@@ -67,8 +67,8 @@ export function emitirMensajeGrupo(msg: MensajeGrupo): void {
  * Actualiza el estado de procesamiento de un mensaje ya emitido.
  * Llamado desde el pipeline cuando termina de analizar el texto.
  */
-export function emitirEstadoProcesado(msgId: string, fueReporte: boolean): void {
-  emitirSSE('procesado', { id: msgId, fueReporte });
+export function emitirEstadoProcesado(msgId: string, fueReporte: boolean, meta?: { gravedad?: string; ubicacion?: string }): void {
+  emitirSSE('procesado', { id: msgId, fueReporte, ...meta });
 }
 
 /**
@@ -282,14 +282,31 @@ export function startDashboard(port: number = 3000) {
     const porGravedad = await prisma.$queryRawUnsafe<Array<{ gravedad: string; count: bigint }>>(
       `SELECT gravedad, COUNT(*) as count FROM reportes WHERE gravedad IS NOT NULL GROUP BY gravedad ORDER BY count DESC`
     );
+    const pendientesFramer = await prisma.reporte.count({
+      where: { framerEnviado: false, framerIntentos: { lt: 5 } },
+    });
     res.json({
       total,
       hoy: hoyCount,
+      pendientesFramer,
       porTipo: porTipo.map(r => ({ tipo: r.tipo_incidente, count: Number(r.count) })),
       porFuente: porFuente.map(r => ({ fuente: r.fuente, count: Number(r.count) })),
       porGravedad: porGravedad.map(r => ({ gravedad: r.gravedad, count: Number(r.count) })),
       waStatus,
     });
+  });
+
+  // API: reintentar Framer manualmente desde el dashboard
+  app.post('/api/framer/reintentar', async (_req, res) => {
+    try {
+      const { reintentarFramerPendientes } = await import('../services/pipeline');
+      await reintentarFramerPendientes();
+      const pendientes = await prisma.reporte.count({ where: { framerEnviado: false, framerIntentos: { lt: 5 } } });
+      res.json({ ok: true, pendientesRestantes: pendientes });
+    } catch (error) {
+      console.error('[Dashboard] Error en reintento manual Framer:', error);
+      res.status(500).json({ ok: false, error: 'Error al reintentar' });
+    }
   });
 
   // API: QR como imagen
@@ -643,7 +660,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="panel-reportes">
     <div class="panel-header">
       <h2>Reportes procesados por IA</h2>
-      <button onclick="exportarCSV()" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:5px 10px;border-radius:6px;font-size:11px;cursor:pointer;">⬇ CSV</button>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="btn-reintentar" onclick="reintentarFramer()" style="display:none;background:#f59e0b1a;border:1px solid #f59e0b40;color:#fbbf24;padding:5px 10px;border-radius:6px;font-size:11px;cursor:pointer;">↻ Reintentar Framer (<span id="pendientes-count">0</span>)</button>
+        <button onclick="exportarCSV()" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:5px 10px;border-radius:6px;font-size:11px;cursor:pointer;">⬇ CSV</button>
+      </div>
     </div>
     <div class="filtros">
       <select class="filtro-select" id="filtro-tipo" onchange="cargarReportes(1)">
@@ -736,6 +756,15 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     const d = await apiFetch('/api/stats');
     document.getElementById('stat-hoy').textContent = d.hoy ?? '—';
     document.getElementById('stat-total').textContent = d.total ?? '—';
+    // Mostrar botón de reintento si hay pendientes
+    const btn = document.getElementById('btn-reintentar');
+    const count = d.pendientesFramer ?? 0;
+    if (count > 0) {
+      document.getElementById('pendientes-count').textContent = count;
+      btn.style.display = 'block';
+    } else {
+      btn.style.display = 'none';
+    }
     const waBadge = document.getElementById('wa-badge');
     if (d.waStatus === 'connected') {
       waBadge.textContent = 'WA Conectado'; waBadge.className = 'topbar-badge badge-live';
@@ -828,6 +857,27 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   function cambiarPagina(delta) { cargarReportes(paginaActual + delta); }
   function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(() => cargarReportes(1), 400); }
 
+  async function reintentarFramer() {
+    const btn = document.getElementById('btn-reintentar');
+    btn.textContent = '↻ Reintentando...';
+    btn.disabled = true;
+    try {
+      const d = await fetch('/api/framer/reintentar', { method: 'POST', headers: authHeaders() }).then(r => r.json());
+      if (d.ok) {
+        const restantes = d.pendientesRestantes ?? 0;
+        if (restantes === 0) {
+          btn.style.display = 'none';
+        } else {
+          document.getElementById('pendientes-count').textContent = restantes;
+          btn.innerHTML = \`↻ Reintentar Framer (<span id="pendientes-count">\${restantes}</span>)\`;
+        }
+        cargarReportes(paginaActual);
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function exportarCSV() {
     const tipo = document.getElementById('filtro-tipo').value;
     const gravedad = document.getElementById('filtro-gravedad').value;
@@ -919,15 +969,21 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     sseSource.addEventListener('procesado', (e) => {
       const d = JSON.parse(e.data);
       const bubble = document.querySelector('[data-msg-id="' + d.id + '"]');
-      if (!bubble) return;
-      const indicator = bubble.querySelector('.msg-indicator');
-      if (!indicator) return;
-      if (d.fueReporte) {
-        indicator.textContent = '🚨 Reporte registrado';
-        indicator.style.color = '#f87171';
-      } else {
-        indicator.textContent = '✓ Sin novedad';
-        indicator.style.color = '#475569';
+      if (bubble) {
+        const indicator = bubble.querySelector('.msg-indicator');
+        if (indicator) {
+          if (d.fueReporte) {
+            indicator.textContent = '🚨 Reporte registrado';
+            indicator.style.color = '#f87171';
+          } else {
+            indicator.textContent = '✓ Sin novedad';
+            indicator.style.color = '#475569';
+          }
+        }
+      }
+      // Notificación del browser si es reporte de gravedad alta
+      if (d.fueReporte && d.gravedad === 'alta') {
+        notificarBrowser('🚨 Reporte de gravedad ALTA', d.ubicacion ? 'Ubicación: ' + d.ubicacion : 'Nuevo incidente registrado');
       }
     });
   }
@@ -987,6 +1043,20 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     });
   });
 
+  // ── NOTIFICACIONES DEL BROWSER ─────────────────────────
+  function notificarBrowser(titulo, cuerpo) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      new Notification(titulo, { body: cuerpo, icon: '/favicon.ico', tag: 'varone-alerta' });
+    }
+  }
+
+  function pedirPermisoNotificaciones() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }
+
   // ── INIT ───────────────────────────────────────────────
   function init() {
     cargarStats();
@@ -994,6 +1064,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     cargarReportes(1);
     cargarResumen();
     conectarSSE();
+    pedirPermisoNotificaciones();
     // El SSE ya actualiza el estado WA en tiempo real.
     // Polling solo para stats/reportes (contadores, paginación).
     setInterval(() => { cargarStats(); cargarMetrics(); }, 30_000);
