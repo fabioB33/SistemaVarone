@@ -12,6 +12,11 @@ services:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U varone -d sistema_varone"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   app:
     build:
@@ -19,13 +24,20 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     env_file:
       - ../.env
     environment:
       DATABASE_URL: postgresql://varone:varone_secret@db:5432/sistema_varone
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
     volumes:
+      # Sesión de WhatsApp — persiste entre reinicios del contenedor
       - wwebjs_auth:/app/.wwebjs_auth
+      # Logs — accesibles desde el host para monitoreo
+      - ./logs:/app/logs
 
 volumes:
   pgdata:

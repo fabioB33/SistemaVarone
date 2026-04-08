@@ -623,6 +623,22 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .pag-btn:not(:disabled):hover { border-color: #475569; color: #e2e8f0; }
     .pag-info { font-size: 12px; color: #475569; }
 
+    /* Modal detalle de reporte */
+    .modal-overlay { position: fixed; inset: 0; background: #000a; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .modal-card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; }
+    .modal-header { padding: 20px 24px 16px; border-bottom: 1px solid #334155; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .modal-header h3 { font-size: 15px; font-weight: 700; color: #f1f5f9; line-height: 1.4; }
+    .modal-close { background: none; border: none; color: #64748b; font-size: 20px; cursor: pointer; padding: 0; line-height: 1; flex-shrink: 0; }
+    .modal-close:hover { color: #e2e8f0; }
+    .modal-body { padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }
+    .modal-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .modal-field { flex: 1; min-width: 140px; }
+    .modal-label { font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+    .modal-value { font-size: 13px; color: #cbd5e1; }
+    .modal-value.mono { font-family: monospace; font-size: 12px; background: #0f172a; padding: 8px 10px; border-radius: 6px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    .reporte-card { cursor: pointer; }
+    .reporte-card:hover { border-color: #3b82f640; background: #1e293bcc; }
+
     /* Panel derecho: chat en tiempo real */
     .panel-chat { background: #0d1525; border-left: 1px solid #1e293b; display: flex; flex-direction: column; }
     .chat-header { padding: 16px 18px; border-bottom: 1px solid #1e293b; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
@@ -742,6 +758,39 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </div>
 </div>
 
+<!-- Modal detalle de reporte -->
+<div class="modal-overlay" id="modal-detalle" style="display:none" onclick="if(event.target===this)cerrarModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3 id="modal-titulo">—</h3>
+      <button class="modal-close" onclick="cerrarModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-row">
+        <div class="modal-field"><div class="modal-label">Tipo</div><div class="modal-value" id="modal-tipo">—</div></div>
+        <div class="modal-field"><div class="modal-label">Gravedad</div><div class="modal-value" id="modal-gravedad">—</div></div>
+        <div class="modal-field"><div class="modal-label">Fecha</div><div class="modal-value" id="modal-fecha">—</div></div>
+        <div class="modal-field"><div class="modal-label">Hora</div><div class="modal-value" id="modal-hora">—</div></div>
+      </div>
+      <div class="modal-row">
+        <div class="modal-field"><div class="modal-label">Ubicación</div><div class="modal-value" id="modal-ubicacion">—</div></div>
+        <div class="modal-field"><div class="modal-label">Ruta</div><div class="modal-value" id="modal-ruta">—</div></div>
+      </div>
+      <div class="modal-row">
+        <div class="modal-field"><div class="modal-label">Vehículo</div><div class="modal-value" id="modal-vehiculo">—</div></div>
+        <div class="modal-field"><div class="modal-label">Patente</div><div class="modal-value" id="modal-patente">—</div></div>
+      </div>
+      <div class="modal-row">
+        <div class="modal-field"><div class="modal-label">Víctimas</div><div class="modal-value" id="modal-victimas">—</div></div>
+        <div class="modal-field"><div class="modal-label">Detenidos</div><div class="modal-value" id="modal-detenidos">—</div></div>
+      </div>
+      <div><div class="modal-label">Descripción</div><div class="modal-value" id="modal-descripcion" style="margin-top:4px;">—</div></div>
+      <div id="modal-url-row" style="display:none"><div class="modal-label">URL noticia</div><a class="modal-value" id="modal-url" href="#" target="_blank" style="color:#3b82f6;font-size:12px;word-break:break-all;">—</a></div>
+      <div><div class="modal-label">Texto original del grupo</div><div class="modal-value mono" id="modal-original">—</div></div>
+    </div>
+  </div>
+</div>
+
 <script>
   const token = localStorage.getItem('varone_token');
   if (!token) { window.location.href = '/login'; }
@@ -843,7 +892,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     }
 
     list.innerHTML = d.reportes.map(r => \`
-      <div class="reporte-card \${r.gravedad || ''}">
+      <div class="reporte-card \${r.gravedad || ''}" onclick='abrirModal(\${JSON.stringify(r).replace(/'/g, "&#39;")})'>
         <div class="rc-header">
           <span class="rc-tipo">\${tipoLabel(r.tipoIncidente)}</span>
           \${r.gravedad ? \`<span class="rc-gravedad \${gravColor(r.gravedad)}">\${gravLabel(r.gravedad)}</span>\` : ''}
@@ -871,6 +920,38 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   function cambiarPagina(delta) { cargarReportes(paginaActual + delta); }
   function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(() => cargarReportes(1), 400); }
+
+  function abrirModal(r) {
+    const set = (id, val) => { document.getElementById(id).textContent = val || '—'; };
+    document.getElementById('modal-titulo').textContent = tipoLabel(r.tipoIncidente) + ' — ' + (r.ubicacion || '—');
+    set('modal-tipo', tipoLabel(r.tipoIncidente));
+    set('modal-gravedad', r.gravedad ? gravLabel(r.gravedad) : '—');
+    set('modal-fecha', r.fecha || '—');
+    set('modal-hora', r.hora || '—');
+    set('modal-ubicacion', r.ubicacion);
+    set('modal-ruta', r.ruta && r.ruta !== 'no especificada' ? r.ruta : '—');
+    set('modal-vehiculo', r.vehiculo);
+    set('modal-patente', r.patente);
+    set('modal-victimas', r.victimas);
+    set('modal-detenidos', r.detenidos);
+    set('modal-descripcion', r.descripcion);
+    set('modal-original', r.textoOriginal);
+    const urlRow = document.getElementById('modal-url-row');
+    if (r.urlNoticia) {
+      document.getElementById('modal-url').href = r.urlNoticia;
+      document.getElementById('modal-url').textContent = r.urlNoticia;
+      urlRow.style.display = 'block';
+    } else {
+      urlRow.style.display = 'none';
+    }
+    document.getElementById('modal-detalle').style.display = 'flex';
+  }
+
+  function cerrarModal() {
+    document.getElementById('modal-detalle').style.display = 'none';
+  }
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarModal(); });
 
   async function reintentarFramer() {
     const btn = document.getElementById('btn-reintentar');
