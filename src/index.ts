@@ -4,6 +4,8 @@ import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
 import { enviarHealthcheck } from './services/healthcheck';
+import { publicarSitio } from './services/framer';
+import { marcarPublicadosTrasPublish } from './services/aprobacion';
 import logger from './services/logger';
 
 // Validar variables de entorno críticas antes de arrancar
@@ -84,6 +86,19 @@ async function main() {
   // Cron: healthcheck diario a las 8:00 AM Argentina
   cron.schedule('0 8 * * *', async () => {
     await enviarHealthcheck();
+  }, { timezone: 'America/Argentina/Buenos_Aires' });
+
+  // Cron: publish diario del sitio Framer a las 9:00 AM Argentina.
+  // Toma todos los reportes 'aprobado' con framerItemId y hace público el sitio.
+  cron.schedule('0 9 * * *', async () => {
+    logger.info('[Cron] Iniciando publicación diaria del sitio Framer...');
+    const result = await publicarSitio();
+    if (!result) {
+      logger.error('[Cron] Falló la publicación diaria del sitio.');
+      return;
+    }
+    const promovidos = await marcarPublicadosTrasPublish();
+    logger.info(`[Cron] Sitio publicado (${result.deploymentId}). Reportes promovidos: ${promovidos}`);
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 }
 

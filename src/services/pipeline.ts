@@ -197,15 +197,15 @@ async function _procesarTexto(
     if (urlNoticia) reporte.urlNoticia = urlNoticia;
     if (portalOrigen) reporte.portalOrigen = portalOrigen;
 
-    // Registrar en DB — obtener el id para trackear estado de Framer
+    // Registrar en DB con estado=pendiente (espera aprobación humana en dashboard)
     const datosReporte: Record<string, unknown> = { ...reporte };
     const reporteId = await registrarReporte(texto, datosReporte);
     incrementarMetrica('reportesRegistrados');
     await verificarSpike();
 
-    // Enviar a Framer pasando el id para actualizar el flag
-    const framerOk = await enviarAFramer(reporte, reporteId);
-    incrementarMetrica(framerOk ? 'framerEnviados' : 'framerFallidos');
+    // El envío a Framer se dispara desde el dashboard al aprobar el reporte.
+    // Acá solo lo dejamos en cola de revisión.
+    logger.info(`[Pipeline] Reporte #${reporteId} en cola de aprobación: ${reporte.tipoIncidente} en ${reporte.ubicacion}`);
 
     if (waMsgId) emitirEstadoProcesado(waMsgId, true, { gravedad: reporte.gravedad, ubicacion: reporte.ubicacion });
     console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente})`);

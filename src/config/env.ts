@@ -13,7 +13,10 @@ export const ENV = {
   // WhatsApp
   WA_GROUP_NAME: process.env.WA_GROUP_NAME || '',
 
-  // Framer
+  // Framer (microservicio framer-publisher en ESM aislado)
+  FRAMER_PUBLISHER_URL: process.env.FRAMER_PUBLISHER_URL || 'http://127.0.0.1:4001',
+  FRAMER_PUBLISHER_TOKEN: process.env.FRAMER_PUBLISHER_TOKEN || '',
+  // Legacy: webhook directo (se usa solo si FRAMER_PUBLISHER_URL no está disponible)
   FRAMER_ENDPOINT: process.env.FRAMER_ENDPOINT || '',
 
   // Scraping
@@ -22,6 +25,10 @@ export const ENV = {
   // Dashboard
   DASHBOARD_USER: process.env.DASHBOARD_USER || 'varone',
   DASHBOARD_PASS: process.env.DASHBOARD_PASS || 'varone2026',
+  // Token de bypass para llamadas server-to-server (varone-admin → backend).
+  // Si está seteado y un request trae el header X-Backend-Token con ese valor,
+  // pasa la auth sin necesidad de cookie/sesión.
+  BACKEND_API_TOKEN: process.env.BACKEND_API_TOKEN || '',
 
   // Alertas Telegram (opcional — si no se configura, solo logea)
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',

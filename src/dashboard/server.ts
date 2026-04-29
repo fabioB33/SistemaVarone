@@ -158,6 +158,21 @@ export function startDashboard(port: number = 3000) {
   // Auth middleware — protege solo las APIs
   app.use((req, res, next) => {
     if (!req.path.startsWith('/api/') || req.path === '/api/login') return next();
+
+    // Bypass server-to-server (varone-admin → backend) vía X-Backend-Token.
+    // Comparación timing-safe para evitar leaks por timing.
+    const backendToken = req.headers['x-backend-token'];
+    if (
+      ENV.BACKEND_API_TOKEN &&
+      typeof backendToken === 'string' &&
+      backendToken.length === ENV.BACKEND_API_TOKEN.length
+    ) {
+      const a = Buffer.from(backendToken);
+      const b = Buffer.from(ENV.BACKEND_API_TOKEN);
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) return next();
+    }
+
+    // Auth tradicional por sesión (login web del propio dashboard).
     const token = req.headers.authorization?.replace('Bearer ', '') ||
                   req.query.token as string;
     if (token && activeSessions.has(token)) {
@@ -309,6 +324,103 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
+  // ─── Flujo de aprobación humana (Framer Server API) ───────────────────────
+
+  // API: listar reportes por estado (default: pendientes)
+  app.get('/api/aprobacion/lista', async (req, res) => {
+    try {
+      const estado = String(req.query.estado || 'pendiente') as
+        | 'pendiente' | 'aprobado' | 'publicado' | 'descartado';
+      const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
+      const { listarPorEstado } = await import('../services/aprobacion');
+      const items = await listarPorEstado(estado, limit);
+      res.json({ ok: true, estado, items });
+    } catch (error) {
+      console.error('[Dashboard] Error listando reportes por estado:', error);
+      res.status(500).json({ ok: false, error: 'Error al listar' });
+    }
+  });
+
+  // API: aprobar reporte → envía a Framer (draft)
+  app.post('/api/aprobacion/aprobar', async (req, res) => {
+    try {
+      const id = parseInt(String(req.body?.id), 10);
+      if (!Number.isFinite(id)) {
+        res.status(400).json({ ok: false, error: 'id inválido' });
+        return;
+      }
+      const aprobadoPor = String(req.body?.aprobadoPor || ENV.DASHBOARD_USER || 'dashboard');
+      const { aprobar } = await import('../services/aprobacion');
+      const result = await aprobar(id, aprobadoPor);
+      res.json(result);
+    } catch (error) {
+      console.error('[Dashboard] Error aprobando reporte:', error);
+      res.status(500).json({ ok: false, error: 'Error al aprobar' });
+    }
+  });
+
+  // API: editar un reporte pendiente antes de aprobarlo
+  app.post('/api/aprobacion/editar', async (req, res) => {
+    try {
+      const id = parseInt(String(req.body?.id), 10);
+      if (!Number.isFinite(id)) {
+        res.status(400).json({ ok: false, error: 'id inválido' });
+        return;
+      }
+      const editorPor = String(req.body?.editorPor || ENV.DASHBOARD_USER || 'dashboard');
+      const cambios = (req.body?.cambios && typeof req.body.cambios === 'object')
+        ? req.body.cambios
+        : {};
+      const { editarPendiente } = await import('../services/aprobacion');
+      const result = await editarPendiente(id, cambios, editorPor);
+      if (!result.ok) {
+        res.status(400).json(result);
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      console.error('[Dashboard] Error editando reporte:', error);
+      res.status(500).json({ ok: false, error: 'Error al editar' });
+    }
+  });
+
+  // API: descartar reporte → nunca llega a Framer
+  app.post('/api/aprobacion/descartar', async (req, res) => {
+    try {
+      const id = parseInt(String(req.body?.id), 10);
+      if (!Number.isFinite(id)) {
+        res.status(400).json({ ok: false, error: 'id inválido' });
+        return;
+      }
+      const descartadoPor = String(req.body?.descartadoPor || ENV.DASHBOARD_USER || 'dashboard');
+      const { descartar } = await import('../services/aprobacion');
+      const result = await descartar(id, descartadoPor);
+      res.json(result);
+    } catch (error) {
+      console.error('[Dashboard] Error descartando reporte:', error);
+      res.status(500).json({ ok: false, error: 'Error al descartar' });
+    }
+  });
+
+  // API: publicar el sitio AHORA (botón manual en dashboard).
+  // Cron diario también lo dispara automáticamente.
+  app.post('/api/framer/publicar', async (_req, res) => {
+    try {
+      const { publicarSitio } = await import('../services/framer');
+      const { marcarPublicadosTrasPublish } = await import('../services/aprobacion');
+      const result = await publicarSitio();
+      if (!result) {
+        res.status(500).json({ ok: false, error: 'Falló publicación del sitio' });
+        return;
+      }
+      const promovidos = await marcarPublicadosTrasPublish();
+      res.json({ ok: true, deploymentId: result.deploymentId, promovidos });
+    } catch (error) {
+      console.error('[Dashboard] Error publicando sitio:', error);
+      res.status(500).json({ ok: false, error: 'Error al publicar' });
+    }
+  });
+
   // API: QR como imagen
   app.get('/api/qr', async (_req, res) => {
     if (!qrData) {
@@ -317,6 +429,25 @@ export function startDashboard(port: number = 3000) {
     }
     const qrImage = await QRCode.toDataURL(qrData, { width: 300 });
     res.json({ status: waStatus, qr: qrImage });
+  });
+
+  // API: estado consolidado de WhatsApp para varone-admin.
+  // Combina status, QR (si aplica), nombre del grupo y métricas básicas.
+  app.get('/api/wa/status', async (_req, res) => {
+    const qr = qrData ? await QRCode.toDataURL(qrData, { width: 300 }) : null;
+    const pendientesCount = await prisma.reporte.count({ where: { estado: 'pendiente' } }).catch(() => 0);
+    const ultimoReporte = await prisma.reporte.findFirst({
+      orderBy: { creadoEn: 'desc' },
+      select: { creadoEn: true },
+    }).catch(() => null);
+    res.json({
+      status: waStatus,
+      qr,
+      groupName: ENV.WA_GROUP_NAME || null,
+      pendientes: pendientesCount,
+      ultimoReporteEn: ultimoReporte?.creadoEn ?? null,
+      ahora: new Date().toISOString(),
+    });
   });
 
   // API: exportar CSV

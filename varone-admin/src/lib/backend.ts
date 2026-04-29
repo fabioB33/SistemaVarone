@@ -1,0 +1,174 @@
+/**
+ * Cliente del backend Sistema Varone.
+ *
+ * Se invoca solo desde Server Components y Server Actions: las credenciales
+ * nunca llegan al browser. El backend Express acepta un bypass por header
+ * `X-Backend-Token` que tiene que coincidir con `BACKEND_API_TOKEN` del
+ * propio backend. Acá lo leemos de `BACKEND_API_TOKEN` del .env.local.
+ *
+ * Si `BACKEND_API_TOKEN` no está seteado, los requests pegarán 401 contra
+ * el backend (el dashboard exige login con cookie/token de sesión).
+ */
+
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_SISTEMA_VARONE_URL || 'http://127.0.0.1:3000';
+
+export interface ReporteListItem {
+  id: number;
+  estado: string;
+  fecha: string;
+  hora: string | null;
+  ubicacion: string;
+  ruta: string;
+  tipoIncidente: string;
+  gravedad: string | null;
+  descripcion: string;
+  fuente: string;
+  urlNoticia: string | null;
+  framerItemId: string | null;
+  framerSlug: string | null;
+  ogImageUrl: string | null;
+  aprobadoPor: string | null;
+  aprobadoEn: string | null;
+  creadoEn: string;
+}
+
+interface BackendResponse<T> {
+  ok: boolean;
+  error?: string;
+  estado?: string;
+  items?: T;
+  framerItemId?: string;
+  framerSlug?: string;
+  deploymentId?: string;
+  promovidos?: number;
+  reporte?: ReporteListItem;
+}
+
+export type ReporteEditableFields = Partial<{
+  ubicacion: string;
+  ruta: string;
+  tipoIncidente: string;
+  gravedad: string | null;
+  descripcion: string;
+  fecha: string;
+  hora: string | null;
+  vehiculo: string | null;
+  patente: string | null;
+  victimas: string | null;
+  detenidos: string | null;
+  urlNoticia: string | null;
+  ogImageUrl: string | null;
+}>;
+
+async function backendFetch<T = unknown>(
+  path: string,
+  init?: RequestInit,
+): Promise<BackendResponse<T>> {
+  const url = `${BACKEND_URL}${path}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((init?.headers as Record<string, string>) || {}),
+  };
+  const backendToken = process.env.BACKEND_API_TOKEN;
+  if (backendToken) {
+    headers['X-Backend-Token'] = backendToken;
+  }
+
+  const res = await fetch(url, {
+    ...init,
+    headers,
+    cache: 'no-store',
+  });
+
+  let json: BackendResponse<T> = { ok: false };
+  try {
+    json = (await res.json()) as BackendResponse<T>;
+  } catch {
+    // Algunas rutas devuelven texto vacío
+  }
+
+  if (!res.ok && !json.error) {
+    json.error = `HTTP ${res.status}`;
+  }
+  return json;
+}
+
+export async function listarReportes(
+  estado: 'pendiente' | 'aprobado' | 'publicado' | 'descartado',
+): Promise<ReporteListItem[]> {
+  const r = await backendFetch<ReporteListItem[]>(
+    `/api/aprobacion/lista?estado=${estado}&limit=100`,
+  );
+  return r.items || [];
+}
+
+export async function aprobarReporte(
+  id: number,
+  aprobadoPor: string,
+): Promise<{ ok: boolean; error?: string; framerItemId?: string; framerSlug?: string }> {
+  return backendFetch('/api/aprobacion/aprobar', {
+    method: 'POST',
+    body: JSON.stringify({ id, aprobadoPor }),
+  });
+}
+
+export async function descartarReporte(
+  id: number,
+  descartadoPor: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return backendFetch('/api/aprobacion/descartar', {
+    method: 'POST',
+    body: JSON.stringify({ id, descartadoPor }),
+  });
+}
+
+export async function editarReporteBackend(
+  id: number,
+  cambios: ReporteEditableFields,
+  editorPor: string,
+): Promise<{ ok: boolean; error?: string; reporte?: ReporteListItem }> {
+  return backendFetch('/api/aprobacion/editar', {
+    method: 'POST',
+    body: JSON.stringify({ id, cambios, editorPor }),
+  });
+}
+
+export async function publicarSitioFramer(): Promise<{
+  ok: boolean;
+  error?: string;
+  deploymentId?: string;
+  promovidos?: number;
+}> {
+  return backendFetch('/api/framer/publicar', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export interface WaStatus {
+  status: 'connected' | 'qr' | 'disconnected';
+  qr: string | null;             // dataURL PNG si status === 'qr'
+  groupName: string | null;
+  pendientes: number;
+  ultimoReporteEn: string | null;
+  ahora: string;
+}
+
+/**
+ * Estado consolidado de WhatsApp para el panel.
+ * Devuelve `null` si el backend no responde (status temporal).
+ */
+export async function obtenerWaStatus(): Promise<WaStatus | null> {
+  try {
+    const url = `${BACKEND_URL}/api/wa/status`;
+    const headers: Record<string, string> = {};
+    const backendToken = process.env.BACKEND_API_TOKEN;
+    if (backendToken) headers['X-Backend-Token'] = backendToken;
+    const res = await fetch(url, { headers, cache: 'no-store' });
+    if (!res.ok) return null;
+    return (await res.json()) as WaStatus;
+  } catch {
+    return null;
+  }
+}

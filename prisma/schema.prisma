@@ -29,7 +29,16 @@ model Reporte {
   portalOrigen   String?  @map("portal_origen")  // nombre del portal si fuente=scraping
   creadoEn       DateTime @default(now()) @map("creado_en")
 
+  // Flujo de aprobación + integración Framer Server API
+  estado         String   @default("pendiente") // 'pendiente' | 'aprobado' | 'descartado' | 'publicado'
+  aprobadoPor    String?  @map("aprobado_por")
+  aprobadoEn     DateTime? @map("aprobado_en")
+  framerItemId   String?  @map("framer_item_id")    // id del item creado en la Collection Notas
+  framerSlug     String?  @map("framer_slug")
+  ogImageUrl     String?  @map("og_image_url")      // URL de Open Graph extraída del urlNoticia
+
   @@map("reportes")
+  @@index([estado])
 }
 
 model ResumenDiario {

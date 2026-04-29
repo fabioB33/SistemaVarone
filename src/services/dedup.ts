@@ -66,11 +66,13 @@ export async function incrementarIntentosFramer(id: number): Promise<void> {
   });
 }
 
-// Devuelve reportes pendientes de enviar a Framer (fallidos o nunca enviados)
-// Con menos de 5 intentos para no reintentar indefinidamente
+// Reportes APROBADOS que aún no se sincronizaron con Framer (errores transitorios).
+// El cron de reintentos los procesa con backoff exponencial.
+// Reportes en estado 'pendiente' o 'descartado' nunca se envían (gate humano del dashboard).
 export async function obtenerPendientesFramer() {
   return prisma.reporte.findMany({
     where: {
+      estado: 'aprobado',
       framerEnviado: false,
       framerIntentos: { lt: 5 },
     },
