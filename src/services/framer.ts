@@ -15,7 +15,10 @@ import { ENV } from '../config/env';
 import { ReporteIncidente } from '../types';
 import { marcarFramerEnviado, incrementarIntentosFramer } from './dedup';
 
-const REQUEST_TIMEOUT_MS = 30_000;
+// Timeout generoso porque la operación involucra: conexión long-lived al SDK
+// de Framer + getCollections + getItems (para auto-count) + addItems +
+// verificación. La primera operación tras un restart del publisher puede tardar.
+const REQUEST_TIMEOUT_MS = 90_000;
 
 interface PublisherResponse {
   ok?: boolean;

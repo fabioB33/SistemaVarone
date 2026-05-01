@@ -16,7 +16,12 @@
 import prisma from './prisma';
 import logger from './logger';
 import { enviarAFramer } from './framer';
+import { registrarAccion, type AuditOrigen } from './audit';
 import { ReporteIncidente } from '../types';
+
+// Origen por defecto cuando se invoca aprobar/descartar/editar sin contexto explicito.
+// El backend pasa el origen real cuando lo conoce (panel, quick-action, etc.).
+type ActorContext = { origen?: AuditOrigen; ip?: string | null; userAgent?: string | null };
 
 export interface ReportePublic {
   id: number;
@@ -62,10 +67,23 @@ export async function listarPorEstado(
 export async function aprobar(
   id: number,
   aprobadoPor: string,
+  ctx: ActorContext = {},
 ): Promise<{ ok: true; framerItemId: string; framerSlug: string } | { ok: false; error: string }> {
+  const origen = ctx.origen ?? 'panel';
   const r = await prisma.reporte.findUnique({ where: { id } });
-  if (!r) return { ok: false, error: 'Reporte no encontrado' };
+  if (!r) {
+    void registrarAccion({
+      evento: 'aprobar.fail.not-found', actor: aprobadoPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+    });
+    return { ok: false, error: 'Reporte no encontrado' };
+  }
   if (r.estado !== 'pendiente') {
+    void registrarAccion({
+      evento: 'aprobar.fail.wrong-state', actor: aprobadoPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+      meta: { estadoActual: r.estado },
+    });
     return { ok: false, error: `Reporte ya está en estado ${r.estado}` };
   }
 
@@ -100,6 +118,10 @@ export async function aprobar(
         aprobadoEn: new Date(),
       },
     });
+    void registrarAccion({
+      evento: 'aprobar.partial.framer-pending', actor: aprobadoPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+    });
     return { ok: false, error: 'Aprobado pero falló el envío a Framer (se reintentará automáticamente)' };
   }
 
@@ -115,13 +137,34 @@ export async function aprobar(
   });
 
   logger.info(`[Aprobación] Reporte #${id} aprobado por ${aprobadoPor} → Framer item ${result.itemId}`);
+  void registrarAccion({
+    evento: 'aprobar.success', actor: aprobadoPor, origen, reporteId: id,
+    ip: ctx.ip, userAgent: ctx.userAgent,
+    meta: { framerItemId: result.itemId, framerSlug: result.slug },
+  });
   return { ok: true, framerItemId: result.itemId, framerSlug: result.slug };
 }
 
-export async function descartar(id: number, descartadoPor: string): Promise<{ ok: boolean; error?: string }> {
+export async function descartar(
+  id: number,
+  descartadoPor: string,
+  ctx: ActorContext = {},
+): Promise<{ ok: boolean; error?: string }> {
+  const origen = ctx.origen ?? 'panel';
   const r = await prisma.reporte.findUnique({ where: { id } });
-  if (!r) return { ok: false, error: 'Reporte no encontrado' };
+  if (!r) {
+    void registrarAccion({
+      evento: 'descartar.fail.not-found', actor: descartadoPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+    });
+    return { ok: false, error: 'Reporte no encontrado' };
+  }
   if (r.estado !== 'pendiente') {
+    void registrarAccion({
+      evento: 'descartar.fail.wrong-state', actor: descartadoPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+      meta: { estadoActual: r.estado },
+    });
     return { ok: false, error: `Reporte ya está en estado ${r.estado}` };
   }
   await prisma.reporte.update({
@@ -133,6 +176,10 @@ export async function descartar(id: number, descartadoPor: string): Promise<{ ok
     },
   });
   logger.info(`[Aprobación] Reporte #${id} descartado por ${descartadoPor}`);
+  void registrarAccion({
+    evento: 'descartar.success', actor: descartadoPor, origen, reporteId: id,
+    ip: ctx.ip, userAgent: ctx.userAgent,
+  });
   return { ok: true };
 }
 
@@ -233,16 +280,45 @@ export async function editarPendiente(
   id: number,
   input: EditarPendienteInput,
   editorPor: string,
+  ctx: ActorContext = {},
 ): Promise<{ ok: true; reporte: ReportePublic } | { ok: false; error: string }> {
+  const origen = ctx.origen ?? 'panel';
   const r = await prisma.reporte.findUnique({ where: { id } });
-  if (!r) return { ok: false, error: 'Reporte no encontrado' };
+  if (!r) {
+    void registrarAccion({
+      evento: 'editar.fail.not-found', actor: editorPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+    });
+    return { ok: false, error: 'Reporte no encontrado' };
+  }
   if (r.estado !== 'pendiente') {
+    void registrarAccion({
+      evento: 'editar.fail.wrong-state', actor: editorPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+      meta: { estadoActual: r.estado },
+    });
     return { ok: false, error: `Solo se pueden editar reportes pendientes (estado actual: ${r.estado})` };
   }
   const norm = normalize(input);
-  if (!norm.ok) return norm;
+  if (!norm.ok) {
+    void registrarAccion({
+      evento: 'editar.fail.validation', actor: editorPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+      meta: { error: norm.error },
+    });
+    return norm;
+  }
   if (Object.keys(norm.data).length === 0) {
     return { ok: false, error: 'Sin cambios' };
+  }
+
+  // Snapshot antes/después solo de los campos modificados, para audit.
+  const cambios: Record<string, { antes: unknown; despues: unknown }> = {};
+  for (const k of Object.keys(norm.data)) {
+    cambios[k] = {
+      antes: (r as Record<string, unknown>)[k] ?? null,
+      despues: norm.data[k],
+    };
   }
 
   const updated = await prisma.reporte.update({
@@ -253,6 +329,11 @@ export async function editarPendiente(
   logger.info(
     `[Aprobación] Reporte #${id} editado por ${editorPor} (${Object.keys(norm.data).length} campos)`,
   );
+  void registrarAccion({
+    evento: 'editar.success', actor: editorPor, origen, reporteId: id,
+    ip: ctx.ip, userAgent: ctx.userAgent,
+    meta: { campos: Object.keys(norm.data), cambios },
+  });
   return { ok: true, reporte: updated as unknown as ReportePublic };
 }
 

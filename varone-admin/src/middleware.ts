@@ -4,7 +4,13 @@ import { NextRequest, NextResponse } from 'next/server';
  * Middleware liviano: si hay cookie de sesión, sigue; si no, redirige a /login.
  * La verificación de firma se hace en cada Server Component vía getSession().
  */
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout'];
+const PUBLIC_PATHS = [
+  '/login',
+  '/api/auth/login',
+  '/api/auth/logout',
+  // /quick/[token] es accesible sin login: el token HMAC ya valida la accion.
+  '/quick',
+];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

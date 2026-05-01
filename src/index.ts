@@ -6,6 +6,7 @@ import { reintentarFramerPendientes } from './services/pipeline';
 import { enviarHealthcheck } from './services/healthcheck';
 import { publicarSitio } from './services/framer';
 import { marcarPublicadosTrasPublish } from './services/aprobacion';
+import { backupDiario } from './services/backups';
 import logger from './services/logger';
 
 // Validar variables de entorno críticas antes de arrancar
@@ -99,6 +100,12 @@ async function main() {
     }
     const promovidos = await marcarPublicadosTrasPublish();
     logger.info(`[Cron] Sitio publicado (${result.deploymentId}). Reportes promovidos: ${promovidos}`);
+  }, { timezone: 'America/Argentina/Buenos_Aires' });
+
+  // Cron: backup diario de la DB a las 3:00 AM Argentina (hora de menor actividad).
+  // El archivo va a backups/varone-YYYY-MM-DD.dump y se mantiene 30 días.
+  cron.schedule('0 3 * * *', async () => {
+    await backupDiario();
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 }
 

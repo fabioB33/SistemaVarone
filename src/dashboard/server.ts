@@ -134,13 +134,24 @@ export function startDashboard(port: number = 3000) {
   app.use(express.json());
 
   // Endpoint de login — devuelve token
-  app.post('/api/login', (req, res) => {
+  app.post('/api/login', async (req, res) => {
     const { user, pass } = req.body;
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim()
+      || req.socket.remoteAddress || null;
+    const userAgent = (req.headers['user-agent'] as string) || null;
+    const { registrarAccion } = await import('../services/audit');
+
     if (user === ENV.DASHBOARD_USER && pass === ENV.DASHBOARD_PASS) {
       const token = crypto.randomBytes(32).toString('hex');
       activeSessions.set(token, Date.now() + SESSION_DURATION);
+      void registrarAccion({
+        evento: 'login.success', actor: String(user), origen: 'panel', ip, userAgent,
+      });
       res.json({ ok: true, token });
     } else {
+      void registrarAccion({
+        evento: 'login.fail', actor: String(user || '(vacio)'), origen: 'panel', ip, userAgent,
+      });
       res.status(401).json({ ok: false, error: 'Credenciales inválidas' });
     }
   });
@@ -158,6 +169,8 @@ export function startDashboard(port: number = 3000) {
   // Auth middleware — protege solo las APIs
   app.use((req, res, next) => {
     if (!req.path.startsWith('/api/') || req.path === '/api/login') return next();
+    // /api/quick-action/* se autentica por token HMAC firmado, no por sesión.
+    if (req.path.startsWith('/api/quick-action')) return next();
 
     // Bypass server-to-server (varone-admin → backend) vía X-Backend-Token.
     // Comparación timing-safe para evitar leaks por timing.
@@ -342,6 +355,122 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: aprobar reporte → envía a Framer (draft)
+  // Helper: deriva el origen de un request a partir de los headers de auth.
+  // Si vino con X-Backend-Token => api-direct (server-to-server).
+  // Si vino con Authorization Bearer / cookie => panel (humano logueado).
+  // Si vino sin nada => sólo posible para rutas públicas como quick-action.
+  function ctxFromReq(req: express.Request, defaultOrigen: 'panel' | 'api-direct' | 'quick-action' = 'panel') {
+    const origen = req.headers['x-backend-token']
+      ? 'api-direct'
+      : defaultOrigen;
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim()
+      || req.socket.remoteAddress
+      || null;
+    const userAgent = (req.headers['user-agent'] as string) || null;
+    return { origen, ip, userAgent };
+  }
+
+  // API: ejecutar accion rapida desde link firmado (Aprobar/Descartar via WhatsApp).
+  // El token HMAC reemplaza la auth de sesion.
+  //
+  // Idempotente: si Varone toca el link 2 veces (porque WhatsApp parece no responder
+  // y vuelve atras), la segunda llamada NO devuelve error — devuelve exito silencioso
+  // indicando que ya estaba en el estado destino. Esto evita el "doble tap = falso error"
+  // en pantalla.
+  //
+  // Conflictos reales (ej: querer descartar algo que ya se aprobo y publico) si devuelven
+  // error explicito porque hay que ir al panel a actuar.
+  app.post('/api/quick-action', async (req, res) => {
+    try {
+      const token = String(req.body?.token || '');
+      if (!token) {
+        res.status(400).json({ ok: false, error: 'token requerido' });
+        return;
+      }
+      const { verificarQuickAction } = await import('../services/notificaciones');
+      const payload = verificarQuickAction(token);
+      if (!payload) {
+        res.status(401).json({ ok: false, error: 'Token inválido o expirado' });
+        return;
+      }
+
+      const { aprobar, descartar } = await import('../services/aprobacion');
+      const actor = 'quick-action-wa';
+
+      // Idempotencia: chequeamos el estado actual antes de ejecutar.
+      const reporte = await prisma.reporte.findUnique({
+        where: { id: payload.id },
+        select: { id: true, estado: true },
+      });
+      if (!reporte) {
+        res.status(404).json({ ok: false, error: 'Reporte no encontrado', action: payload.action, id: payload.id });
+        return;
+      }
+
+      if (payload.action === 'aprobar') {
+        // Ya aprobado o publicado → exito silencioso (no re-ejecutar)
+        if (reporte.estado === 'aprobado' || reporte.estado === 'publicado') {
+          res.json({
+            ok: true,
+            action: 'aprobar',
+            id: payload.id,
+            alreadyDone: true,
+            estado: reporte.estado,
+            message: reporte.estado === 'publicado'
+              ? 'Este reporte ya fue aprobado y publicado.'
+              : 'Este reporte ya fue aprobado, esperando publicación.',
+          });
+          return;
+        }
+        // Ya descartado → conflicto, hay que ir al panel
+        if (reporte.estado === 'descartado') {
+          res.status(409).json({
+            ok: false,
+            action: 'aprobar',
+            id: payload.id,
+            estado: reporte.estado,
+            error: 'Este reporte fue descartado. Si querés recuperarlo, hacelo desde el panel.',
+          });
+          return;
+        }
+        // estado === 'pendiente' → ejecutar
+        const result = await aprobar(payload.id, actor, ctxFromReq(req, 'quick-action'));
+        res.json({ ok: result.ok, error: result.ok ? undefined : result.error, action: 'aprobar', id: payload.id });
+        return;
+      }
+
+      // payload.action === 'descartar'
+      if (reporte.estado === 'descartado') {
+        res.json({
+          ok: true,
+          action: 'descartar',
+          id: payload.id,
+          alreadyDone: true,
+          estado: reporte.estado,
+          message: 'Este reporte ya estaba descartado.',
+        });
+        return;
+      }
+      if (reporte.estado === 'aprobado' || reporte.estado === 'publicado') {
+        res.status(409).json({
+          ok: false,
+          action: 'descartar',
+          id: payload.id,
+          estado: reporte.estado,
+          error: reporte.estado === 'publicado'
+            ? 'Este reporte ya fue publicado. Para retirarlo del sitio, usá el panel.'
+            : 'Este reporte ya fue aprobado. Para revertirlo, hacelo desde el panel.',
+        });
+        return;
+      }
+      const result = await descartar(payload.id, actor, ctxFromReq(req, 'quick-action'));
+      res.json({ ok: result.ok, error: result.ok ? undefined : result.error, action: 'descartar', id: payload.id });
+    } catch (error) {
+      console.error('[Dashboard] Error en quick-action:', error);
+      res.status(500).json({ ok: false, error: 'Error procesando acción' });
+    }
+  });
+
   app.post('/api/aprobacion/aprobar', async (req, res) => {
     try {
       const id = parseInt(String(req.body?.id), 10);
@@ -351,7 +480,7 @@ export function startDashboard(port: number = 3000) {
       }
       const aprobadoPor = String(req.body?.aprobadoPor || ENV.DASHBOARD_USER || 'dashboard');
       const { aprobar } = await import('../services/aprobacion');
-      const result = await aprobar(id, aprobadoPor);
+      const result = await aprobar(id, aprobadoPor, ctxFromReq(req));
       res.json(result);
     } catch (error) {
       console.error('[Dashboard] Error aprobando reporte:', error);
@@ -372,7 +501,7 @@ export function startDashboard(port: number = 3000) {
         ? req.body.cambios
         : {};
       const { editarPendiente } = await import('../services/aprobacion');
-      const result = await editarPendiente(id, cambios, editorPor);
+      const result = await editarPendiente(id, cambios, editorPor, ctxFromReq(req));
       if (!result.ok) {
         res.status(400).json(result);
         return;
@@ -394,7 +523,7 @@ export function startDashboard(port: number = 3000) {
       }
       const descartadoPor = String(req.body?.descartadoPor || ENV.DASHBOARD_USER || 'dashboard');
       const { descartar } = await import('../services/aprobacion');
-      const result = await descartar(id, descartadoPor);
+      const result = await descartar(id, descartadoPor, ctxFromReq(req));
       res.json(result);
     } catch (error) {
       console.error('[Dashboard] Error descartando reporte:', error);
@@ -404,16 +533,29 @@ export function startDashboard(port: number = 3000) {
 
   // API: publicar el sitio AHORA (botón manual en dashboard).
   // Cron diario también lo dispara automáticamente.
-  app.post('/api/framer/publicar', async (_req, res) => {
+  app.post('/api/framer/publicar', async (req, res) => {
     try {
       const { publicarSitio } = await import('../services/framer');
       const { marcarPublicadosTrasPublish } = await import('../services/aprobacion');
+      const { registrarAccion } = await import('../services/audit');
+      const ctx = ctxFromReq(req);
+      const actor = String(req.body?.actor || ENV.DASHBOARD_USER || 'dashboard');
+
       const result = await publicarSitio();
       if (!result) {
+        void registrarAccion({
+          evento: 'publicar.fail', actor, origen: ctx.origen,
+          ip: ctx.ip, userAgent: ctx.userAgent,
+        });
         res.status(500).json({ ok: false, error: 'Falló publicación del sitio' });
         return;
       }
       const promovidos = await marcarPublicadosTrasPublish();
+      void registrarAccion({
+        evento: 'publicar.success', actor, origen: ctx.origen,
+        ip: ctx.ip, userAgent: ctx.userAgent,
+        meta: { deploymentId: result.deploymentId, promovidos },
+      });
       res.json({ ok: true, deploymentId: result.deploymentId, promovidos });
     } catch (error) {
       console.error('[Dashboard] Error publicando sitio:', error);
@@ -429,6 +571,60 @@ export function startDashboard(port: number = 3000) {
     }
     const qrImage = await QRCode.toDataURL(qrData, { width: 300 });
     res.json({ status: waStatus, qr: qrImage });
+  });
+
+  // API: consultar audit log (read-only).
+  // Filtros opcionales por reporteId, actor o evento.
+  app.get('/api/audit', async (req, res) => {
+    try {
+      const { listarAuditLog } = await import('../services/audit');
+      const limit = Math.min(parseInt(String(req.query.limit || '100'), 10) || 100, 500);
+      const reporteId = req.query.reporteId
+        ? parseInt(String(req.query.reporteId), 10)
+        : undefined;
+      const actor = req.query.actor ? String(req.query.actor) : undefined;
+      const evento = req.query.evento ? String(req.query.evento) : undefined;
+
+      const items = await listarAuditLog({
+        limit,
+        reporteId: Number.isFinite(reporteId) ? reporteId : undefined,
+        actor,
+        evento,
+      });
+      res.json({ ok: true, count: items.length, items });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // API: status de backups (lista + tamaño total + último backup).
+  app.get('/api/backups/status', async (_req, res) => {
+    try {
+      const { statsBackups, listarBackups } = await import('../services/backups');
+      const [stats, items] = await Promise.all([statsBackups(), listarBackups()]);
+      res.json({
+        ok: true,
+        ...stats,
+        items: items.map(i => ({
+          filename: i.filename,
+          size: i.size,
+          createdAt: i.createdAt.toISOString(),
+        })),
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // API: ejecutar backup manual ahora.
+  app.post('/api/backups/run', async (_req, res) => {
+    try {
+      const { ejecutarBackup } = await import('../services/backups');
+      const result = await ejecutarBackup();
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
   });
 
   // API: estado consolidado de WhatsApp para varone-admin.

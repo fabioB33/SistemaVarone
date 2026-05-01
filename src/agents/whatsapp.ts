@@ -11,7 +11,15 @@ import { registrarClienteWA, notificar } from '../services/notificaciones';
 const RECONEXION_BASE_MS = 10_000;   // 10s primer intento
 const RECONEXION_MAX_MS = 5 * 60_000; // máximo 5 minutos entre intentos
 const RECONEXION_MAX_INTENTOS = 10;   // después de 10 intentos fallidos, alerta crítica
+const ALERTA_DOWNTIME_MS = 3 * 60_000; // alertar a Varone si downtime > 3 minutos
 let intentosReconexion = 0;
+let timestampDesconexion: number | null = null;
+let alertaDowntimeEnviada = false;
+
+// Watchdog: si no llega ningún mensaje por X horas, asumimos zombie y reiniciamos.
+// 6 horas es razonable: en el grupo de Varone entran varios mensajes por día.
+const WATCHDOG_INACTIVIDAD_MS = 6 * 60 * 60 * 1000;
+let ultimaActividad = Date.now();
 
 function calcularEsperaReconexion(): number {
   const espera = Math.min(RECONEXION_BASE_MS * Math.pow(2, intentosReconexion), RECONEXION_MAX_MS);
@@ -87,6 +95,18 @@ export function iniciarWhatsApp(): void {
   client.on('ready', async () => {
     logger.info('[WhatsApp] Conectado y escuchando mensajes...');
     intentosReconexion = 0;
+    ultimaActividad = Date.now();
+
+    // Si veníamos de una caída, avisar que volvimos
+    if (timestampDesconexion && alertaDowntimeEnviada) {
+      const downSegs = Math.round((Date.now() - timestampDesconexion) / 1000);
+      const mins = Math.floor(downSegs / 60);
+      const segs = downSegs % 60;
+      await notificar(`✅ *Sistema Varone* WhatsApp reconectado tras ${mins}m ${segs}s de downtime.`).catch(() => {});
+    }
+    timestampDesconexion = null;
+    alertaDowntimeEnviada = false;
+
     setWaConnected();
     // Registrar el cliente para que el módulo de notificaciones pueda usarlo
     registrarClienteWA(client);
@@ -96,6 +116,7 @@ export function iniciarWhatsApp(): void {
 
   client.on('message', async (msg: Message) => {
     try {
+      ultimaActividad = Date.now();
       const chat = await msg.getChat();
 
       if (!chat.isGroup || chat.name !== ENV.WA_GROUP_NAME) return;
@@ -148,14 +169,26 @@ export function iniciarWhatsApp(): void {
     setWaDisconnected();
     await notificarDesconexion(reason);
 
+    if (!timestampDesconexion) timestampDesconexion = Date.now();
+
     intentosReconexion++;
     const espera = calcularEsperaReconexion();
     logger.info(`[WhatsApp] Reconexión intento ${intentosReconexion}/${RECONEXION_MAX_INTENTOS} en ${espera / 1000}s...`);
 
+    // Alerta temprana: tras 3 min de downtime, avisar a Varone (una sola vez)
+    const downtime = Date.now() - timestampDesconexion;
+    if (downtime >= ALERTA_DOWNTIME_MS && !alertaDowntimeEnviada) {
+      alertaDowntimeEnviada = true;
+      const mins = Math.floor(downtime / 60_000);
+      await notificar(
+        `⚠️ *Sistema Varone* WhatsApp desconectado hace ${mins}m. Reintentando automáticamente. Motivo: ${reason}`
+      ).catch(e => logger.error('[WhatsApp] Error enviando alerta downtime:', e));
+    }
+
     if (intentosReconexion >= RECONEXION_MAX_INTENTOS) {
       const msg = `🚨 Sistema Varone — ALERTA CRÍTICA\nWhatsApp no pudo reconectar después de ${RECONEXION_MAX_INTENTOS} intentos.\nMotivo: ${reason}\nIntervención manual requerida.`;
       logger.error(`[WhatsApp] ${msg}`);
-      await notificar(msg);
+      await notificar(msg).catch(() => {});
     }
 
     setTimeout(() => client.initialize(), espera);
@@ -164,9 +197,29 @@ export function iniciarWhatsApp(): void {
   client.on('auth_failure', async (msg) => {
     logger.error('[WhatsApp] Error de autenticación:', msg);
     setWaDisconnected();
-    const alerta = `🔐 *Sistema Varone — Error de autenticación*\nWhatsApp rechazó las credenciales guardadas.\nMotivo: ${msg}\n\nAcción requerida: detener el sistema, borrar la carpeta \`.wwebjs_auth/\` y reiniciar para escanear el QR nuevamente.`;
+    const alerta = `🔐 *Sistema Varone — Error de autenticación*\nWhatsApp rechazó las credenciales guardadas.\nMotivo: ${msg}\n\nEl sistema reintentará automáticamente. Si persiste, hay que reescanear el QR desde el panel.`;
     await notificar(alerta).catch(e => logger.error('[WhatsApp] Error enviando alerta auth_failure:', e));
+
+    // Reintentar conexión: el QR aparecerá de nuevo en el panel para reescanear.
+    // No borramos .wwebjs_auth/ automáticamente — preservamos la sesión por si
+    // fue un fallo transitorio. El usuario decide desde el panel si la borra.
+    intentosReconexion++;
+    setTimeout(() => client.initialize().catch(e => logger.error('[WhatsApp] Re-init falló:', e)), 30_000);
   });
+
+  // Watchdog de inactividad: si no llegan mensajes por 6h, reiniciamos el cliente
+  // (el bot puede quedar "vivo pero zombie" — conectado pero sin recibir).
+  setInterval(() => {
+    if (!client) return;
+    const inactivo = Date.now() - ultimaActividad;
+    if (inactivo > WATCHDOG_INACTIVIDAD_MS) {
+      logger.warn(`[WhatsApp] Watchdog: sin actividad por ${Math.round(inactivo / 60_000)}m. Reiniciando cliente...`);
+      ultimaActividad = Date.now(); // evitar re-disparo en bucle
+      client.destroy().then(() => {
+        client.initialize().catch(e => logger.error('[WhatsApp] Watchdog re-init falló:', e));
+      }).catch(e => logger.error('[WhatsApp] Watchdog destroy falló:', e));
+    }
+  }, 30 * 60_000); // chequea cada 30 min
 
   client.initialize();
 }

@@ -5,6 +5,7 @@ import { incrementarMetrica, emitirEstadoProcesado } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
 import { ENV } from '../config/env';
 import logger from './logger';
+import { notificarReportePendiente } from './notificaciones';
 
 // F2: detectar spike — si entran N reportes relevantes en una ventana de tiempo, alertar
 const SPIKE_VENTANA_MS = 10 * 60 * 1000;  // 10 minutos
@@ -206,6 +207,17 @@ async function _procesarTexto(
     // El envío a Framer se dispara desde el dashboard al aprobar el reporte.
     // Acá solo lo dejamos en cola de revisión.
     logger.info(`[Pipeline] Reporte #${reporteId} en cola de aprobación: ${reporte.tipoIncidente} en ${reporte.ubicacion}`);
+
+    // Notificación al celular de Varone con links Aprobar/Descartar/Editar.
+    // No bloquea el pipeline si falla el envío.
+    void notificarReportePendiente({
+      id: reporteId,
+      tipoIncidente: reporte.tipoIncidente,
+      ubicacion: reporte.ubicacion,
+      ruta: reporte.ruta,
+      fecha: reporte.fecha,
+      descripcion: reporte.descripcion,
+    }).catch(e => logger.error('[Pipeline] Error notificando reporte pendiente:', e));
 
     if (waMsgId) emitirEstadoProcesado(waMsgId, true, { gravedad: reporte.gravedad, ubicacion: reporte.ubicacion });
     console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente})`);

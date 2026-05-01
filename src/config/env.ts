@@ -30,6 +30,14 @@ export const ENV = {
   // pasa la auth sin necesidad de cookie/sesión.
   BACKEND_API_TOKEN: process.env.BACKEND_API_TOKEN || '',
 
+  // Secret para firmar tokens de "quick action" (links Aprobar/Descartar
+  // que Varone recibe por WhatsApp). HMAC-SHA256, mínimo 32 chars.
+  QUICK_ACTION_SECRET: process.env.QUICK_ACTION_SECRET || '',
+
+  // URL pública del panel admin (para armar los links de notificaciones).
+  // En dev: http://localhost:3001. En prod: https://admin.tudominio.com
+  ADMIN_PUBLIC_URL: process.env.ADMIN_PUBLIC_URL || 'http://localhost:3001',
+
   // Alertas Telegram (opcional — si no se configura, solo logea)
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '',

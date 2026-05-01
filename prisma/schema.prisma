@@ -49,3 +49,38 @@ model ResumenDiario {
 
   @@map("resumenes_diarios")
 }
+
+// Audit log inmutable de acciones sensibles (aprobaciones, edits, descartes,
+// publicaciones, login). Append-only: nunca se actualizan ni borran filas.
+//
+// Usos:
+//  - Trazabilidad: "¿quién aprobó esto?", "¿quién editó tal campo?"
+//  - Compliance: si hay polémica con una noticia publicada, hay registro completo.
+//  - Detectar uso anómalo: muchos descartes en poco tiempo, login desde IP rara, etc.
+model AuditLog {
+  id           BigInt   @id @default(autoincrement())
+  // Tipo de evento canónico, p.ej. "aprobar.success", "aprobar.alreadyDone",
+  // "descartar.success", "editar.success", "publicar.success", "publicar.fail",
+  // "login.success", "login.fail", "logout", "quick-action.aprobar.success".
+  evento       String
+  // Quién: usuario del panel, o "quick-action-wa", o "cron-9am", o "system".
+  actor        String
+  // Origen del request: "panel", "quick-action", "api-direct", "cron", "system".
+  origen       String
+  // Reporte tocado, si aplica.
+  reporteId    Int?     @map("reporte_id")
+  // IP del request si la conocemos (panel/quick-action). Null en cron/system.
+  ip           String?
+  user_agent   String?  @map("user_agent")
+  // Detalle libre en JSON: cambios aplicados en edición, error mensaje, etc.
+  // Limitado a ~4 KB en práctica.
+  meta         Json?
+  // Timestamp inmutable.
+  ts           DateTime @default(now())
+
+  @@map("audit_log")
+  @@index([reporteId])
+  @@index([actor])
+  @@index([evento])
+  @@index([ts])
+}
