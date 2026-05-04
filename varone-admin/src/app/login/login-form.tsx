@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { LogIn, Loader2 } from 'lucide-react';
+import { LogIn, Loader2, AlertCircle } from 'lucide-react';
 
 interface Props {
   next?: string;
@@ -36,41 +36,61 @@ export function LoginForm({ next, initialError }: Props) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
+    <form onSubmit={onSubmit} className="space-y-5" noValidate>
       <div>
-        <label className="mb-1 block text-xs font-medium text-slate-400">Usuario</label>
+        <label htmlFor="user" className="vc-label">Usuario</label>
         <input
+          id="user"
           type="text"
           required
           autoComplete="username"
           value={user}
           onChange={(e) => setUser(e.target.value)}
-          className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none transition focus:border-slate-500"
+          placeholder="varone"
+          className="vc-input"
         />
       </div>
+
       <div>
-        <label className="mb-1 block text-xs font-medium text-slate-400">Contraseña</label>
+        <label htmlFor="pass" className="vc-label">Contraseña</label>
         <input
+          id="pass"
           type="password"
           required
           autoComplete="current-password"
           value={pass}
           onChange={(e) => setPass(e.target.value)}
-          className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none transition focus:border-slate-500"
+          placeholder="••••••••"
+          className="vc-input"
         />
       </div>
+
       {error && (
-        <p className="rounded-md border border-red-900/50 bg-red-950/40 px-3 py-2 text-xs text-red-300">
-          {error}
-        </p>
+        <div
+          role="alert"
+          className="flex items-start gap-2.5 rounded-lg border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-sm text-danger animate-fade-in"
+        >
+          <AlertCircle className="mt-0.5 size-4 shrink-0" />
+          <span>{error}</span>
+        </div>
       )}
+
       <button
         type="submit"
         disabled={isPending}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 transition hover:bg-white disabled:opacity-50"
+        className="vc-btn vc-btn-primary vc-btn-md w-full"
       >
-        {isPending ? <Loader2 className="size-4 animate-spin" /> : <LogIn className="size-4" />}
-        Entrar
+        {isPending ? (
+          <>
+            <Loader2 className="size-4 animate-spin" />
+            Verificando…
+          </>
+        ) : (
+          <>
+            <LogIn className="size-4" />
+            Iniciar sesión
+          </>
+        )}
       </button>
     </form>
   );

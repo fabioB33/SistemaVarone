@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   CheckCircle2,
   WifiOff,
@@ -8,17 +9,26 @@ import {
   Clock,
   Inbox,
   RefreshCw,
+  QrCode,
 } from 'lucide-react';
 import type { WaStatus } from '@/lib/backend';
 import { cn, formatDate } from '@/lib/utils';
 
-const POLL_FAST_MS = 3_000;     // status QR / desconectado: revisamos seguido
-const POLL_SLOW_MS = 30_000;    // ya conectado: chequeo de salud cada 30s
+const POLL_FAST_MS = 3_000;
+const POLL_SLOW_MS = 30_000;
 
 export function WaStatusPanel() {
+  const router = useRouter();
   const [data, setData] = useState<(WaStatus & { backendDown?: boolean }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Espejo del status actual fuera del closure del useEffect — ASÍ el polling
+  // siempre lee el último valor para decidir el intervalo (sin esto el closure
+  // queda capturado con data=null y el polling nunca pasa al modo lento).
+  const statusRef = useRef<WaStatus['status'] | null>(null);
+  // Flag para detectar transiciones (qr → connected) y refrescar el resto
+  // del panel cuando el bot recién se conecta.
+  const wasConnectedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,6 +40,15 @@ export function WaStatusPanel() {
         if (!cancelled && r.ok) {
           const j = (await r.json()) as WaStatus & { backendDown?: boolean };
           setData(j);
+          statusRef.current = j.status;
+          // Transición a "connected": refrescar Server Components para
+          // traer reportes nuevos y métricas frescas.
+          if (j.status === 'connected' && !wasConnectedRef.current) {
+            wasConnectedRef.current = true;
+            router.refresh();
+          } else if (j.status !== 'connected') {
+            wasConnectedRef.current = false;
+          }
         }
       } catch {
         // ignorar
@@ -37,7 +56,7 @@ export function WaStatusPanel() {
         if (!cancelled) setLoading(false);
       }
       if (cancelled) return;
-      const interval = data?.status === 'connected' ? POLL_SLOW_MS : POLL_FAST_MS;
+      const interval = statusRef.current === 'connected' ? POLL_SLOW_MS : POLL_FAST_MS;
       timer = setTimeout(tick, interval);
     }
 
@@ -46,58 +65,55 @@ export function WaStatusPanel() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-    // refreshKey en deps → fuerza re-iniciar polling cuando se aprieta refresh manual
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
   return (
-    <aside className="space-y-4">
-      <Header onRefresh={() => setRefreshKey((k) => k + 1)} loading={loading} />
-      <BackendDownAlert visible={!!data?.backendDown} />
+    <aside className="space-y-3">
+      <header className="flex items-center justify-between">
+        <h2 className="text-2xs font-semibold uppercase tracking-[0.18em] text-fg-muted">
+          Estado del bot
+        </h2>
+        <button
+          onClick={() => setRefreshKey((k) => k + 1)}
+          className="vc-btn vc-btn-ghost vc-btn-sm"
+          aria-label="Refrescar estado"
+          title="Refrescar ahora"
+        >
+          <RefreshCw className={cn('size-3', loading && 'animate-spin')} />
+        </button>
+      </header>
+
+      {!data && !loading && (
+        <div className="vc-card p-4 text-xs text-fg-subtle">
+          Sin datos del backend.
+        </div>
+      )}
+
+      {data?.backendDown && <BackendDownAlert />}
+
       {data && !data.backendDown && (
-        <>
+        <div className="space-y-3 animate-fade-in">
           <StatusCard data={data} />
           {data.status === 'qr' && data.qr && <QrCard qr={data.qr} />}
           <StatsCard data={data} />
-        </>
-      )}
-      {!data && !loading && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-xs text-slate-500">
-          Sin datos del backend. ¿Está corriendo?
         </div>
       )}
     </aside>
   );
 }
 
-function Header({ onRefresh, loading }: { onRefresh: () => void; loading: boolean }) {
+function BackendDownAlert() {
   return (
-    <div className="flex items-center justify-between">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-        Estado WhatsApp
-      </h2>
-      <button
-        onClick={onRefresh}
-        className="inline-flex items-center gap-1.5 rounded-md border border-slate-800 px-2 py-1 text-[10px] text-slate-400 transition hover:border-slate-700 hover:text-slate-200"
-        title="Refrescar ahora"
-      >
-        <RefreshCw className={cn('size-3', loading && 'animate-spin')} />
-        Refrescar
-      </button>
-    </div>
-  );
-}
-
-function BackendDownAlert({ visible }: { visible: boolean }) {
-  if (!visible) return null;
-  return (
-    <div className="rounded-xl border border-red-900/50 bg-red-950/30 p-4">
-      <div className="flex items-start gap-2">
-        <WifiOff className="mt-0.5 size-4 shrink-0 text-red-400" />
+    <div className="vc-card overflow-hidden border-danger/30 bg-danger/5">
+      <div className="flex items-start gap-3 p-4">
+        <span className="grid size-9 shrink-0 place-items-center rounded-md bg-danger/15">
+          <WifiOff className="size-4 text-danger" />
+        </span>
         <div>
-          <p className="text-sm font-medium text-red-200">Backend no responde</p>
-          <p className="mt-1 text-xs text-red-300/70">
-            El sistema Varone (puerto 3000) no está accesible. Revisá que esté corriendo.
+          <p className="text-sm font-semibold text-fg">Backend no responde</p>
+          <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+            El sistema (puerto 3000) no está accesible. Verificá que esté corriendo.
           </p>
         </div>
       </div>
@@ -109,57 +125,74 @@ function StatusCard({ data }: { data: WaStatus }) {
   const map = {
     connected: {
       icon: CheckCircle2,
-      iconCls: 'text-emerald-400',
-      ring: 'ring-emerald-500/20 bg-emerald-500/5',
+      ring: 'border-ok/30 bg-ok/5',
+      iconBg: 'bg-ok/15',
+      iconColor: 'text-ok',
+      pulse: 'bg-ok',
+      label: 'Operativo',
+      labelColor: 'text-ok',
       title: 'Conectado',
-      pulse: 'bg-emerald-400',
       desc: data.groupName
-        ? `Escuchando "${data.groupName}"`
-        : 'Escuchando el grupo configurado',
+        ? `Escuchando “${data.groupName}”.`
+        : 'Escuchando el grupo configurado.',
     },
     qr: {
       icon: Smartphone,
-      iconCls: 'text-amber-400',
-      ring: 'ring-amber-500/20 bg-amber-500/5',
-      title: 'Esperando vinculación',
-      pulse: 'bg-amber-400',
-      desc: 'Escaneá el QR desde WhatsApp para conectar el bot.',
+      ring: 'border-warn/30 bg-warn/5',
+      iconBg: 'bg-warn/15',
+      iconColor: 'text-warn',
+      pulse: 'bg-warn',
+      label: 'Esperando',
+      labelColor: 'text-warn',
+      title: 'Vinculá tu WhatsApp',
+      desc: 'Escaneá el código para activar el bot.',
     },
     disconnected: {
       icon: WifiOff,
-      iconCls: 'text-red-400',
-      ring: 'ring-red-500/20 bg-red-500/5',
-      title: 'Desconectado',
-      pulse: 'bg-red-400',
-      desc: 'El bot no está recibiendo mensajes. Iniciá sesión escaneando el QR.',
+      ring: 'border-danger/30 bg-danger/5',
+      iconBg: 'bg-danger/15',
+      iconColor: 'text-danger',
+      pulse: 'bg-danger',
+      label: 'Desconectado',
+      labelColor: 'text-danger',
+      title: 'Sin conexión',
+      desc: 'No estás recibiendo mensajes.',
     },
   } as const;
 
-  const { icon: Icon, iconCls, ring, title, desc, pulse } = map[data.status];
+  const cfg = map[data.status];
+  const Icon = cfg.icon;
+  const cargando = data.cargando === true;
 
   return (
-    <div className={cn('rounded-xl border border-slate-800 p-4 ring-1', ring)}>
-      <div className="flex items-start gap-3">
-        <div className="relative mt-0.5">
-          <Icon className={cn('size-5', iconCls)} />
-          {data.status !== 'disconnected' && (
-            <span
-              className={cn(
-                'absolute -right-0.5 -top-0.5 inline-flex h-2 w-2 rounded-full',
-                pulse,
-                data.status === 'connected' && 'animate-pulse',
-              )}
-            />
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-slate-100">{title}</p>
-          <p className="mt-1 text-xs text-slate-400">{desc}</p>
-          {data.groupName && data.status === 'connected' && (
-            <p className="mt-2 text-[11px] text-slate-500">
-              Grupo: <span className="font-mono text-slate-300">{data.groupName}</span>
+    <div className={cn('vc-card overflow-hidden transition-colors', cfg.ring)}>
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          <span
+            className={cn(
+              'grid size-10 shrink-0 place-items-center rounded-md ring-1 ring-line',
+              cfg.iconBg,
+              cargando && 'animate-pulse',
+            )}
+          >
+            <Icon className={cn('size-5', cfg.iconColor)} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className={cn('text-2xs font-semibold uppercase tracking-wider', cfg.labelColor)}>
+              <span className="mr-1.5 inline-flex">
+                <span className={cn('size-1.5 rounded-full animate-pulse-dot', cfg.pulse)} />
+              </span>
+              {cargando ? 'Iniciando' : cfg.label}
             </p>
-          )}
+            <p className="mt-1 text-base font-semibold leading-tight text-fg">
+              {cargando ? 'Conectando…' : cfg.title}
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+              {cargando
+                ? `Verificando estado del bot. Último estado conocido: ${cfg.label.toLowerCase()}.`
+                : cfg.desc}
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -168,44 +201,98 @@ function StatusCard({ data }: { data: WaStatus }) {
 
 function QrCard({ qr }: { qr: string }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-      <p className="mb-3 text-xs font-medium text-slate-400">Escaneá con WhatsApp</p>
-      <div className="rounded-lg bg-white p-3">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={qr} alt="QR de WhatsApp" className="block w-full" />
+    <div className="vc-card overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-line bg-subtle/40 px-4 py-2.5">
+        <QrCode className="size-3.5 text-accent" />
+        <span className="text-2xs font-semibold uppercase tracking-wider text-fg-muted">
+          Escaneá para vincular
+        </span>
       </div>
-      <ol className="mt-3 list-decimal space-y-1 pl-4 text-[11px] leading-relaxed text-slate-400">
-        <li>Abrí WhatsApp en tu celular.</li>
-        <li>
-          Tocá <strong>⋮</strong> → <strong>Dispositivos vinculados</strong>.
-        </li>
-        <li>Tocá <strong>Vincular un dispositivo</strong> y apuntá la cámara al QR.</li>
-      </ol>
-      <p className="mt-2 text-[10px] text-slate-500">
-        El QR expira cada ~60 s. Si no lo escaneás a tiempo, se genera otro automáticamente.
-      </p>
+      <div className="p-4">
+        <div className="rounded-lg bg-white p-3 shadow-md ring-1 ring-line">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={qr}
+            alt="Código QR de WhatsApp Web — escanealo desde tu celular"
+            className="block h-auto w-full"
+          />
+        </div>
+        <ol className="mt-4 space-y-2 text-xs text-fg-muted">
+          <Step n={1}>Abrí WhatsApp en tu celular.</Step>
+          <Step n={2}>
+            Tocá <strong className="text-fg-secondary">Configuración → Dispositivos vinculados</strong>.
+          </Step>
+          <Step n={3}>
+            Tocá <strong className="text-fg-secondary">Vincular un dispositivo</strong> y apuntá la cámara.
+          </Step>
+        </ol>
+        <p className="mt-3 text-2xs text-fg-subtle">
+          El QR expira cada ~60 s. Si no llegás a tiempo se genera otro automáticamente.
+        </p>
+      </div>
     </div>
+  );
+}
+
+function Step({ n, children }: { n: number; children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-2.5">
+      <span className="mt-px grid size-4 shrink-0 place-items-center rounded-full bg-accent/15 text-2xs font-semibold text-accent">
+        {n}
+      </span>
+      <span className="leading-relaxed">{children}</span>
+    </li>
   );
 }
 
 function StatsCard({ data }: { data: WaStatus }) {
   return (
     <div className="grid grid-cols-2 gap-2">
-      <div className="rounded-lg border border-slate-800 bg-slate-900/30 p-3">
-        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500">
-          <Inbox className="size-3" /> Pendientes
-        </div>
-        <div className="mt-1 text-xl font-semibold text-slate-100">{data.pendientes}</div>
-      </div>
-      <div className="rounded-lg border border-slate-800 bg-slate-900/30 p-3">
-        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500">
-          <Clock className="size-3" /> Último reporte
-        </div>
-        <div className="mt-1 truncate text-xs text-slate-200" title={data.ultimoReporteEn ?? ''}>
-          {data.ultimoReporteEn ? formatDate(data.ultimoReporteEn) : '—'}
-        </div>
-      </div>
+      <Stat
+        icon={Inbox}
+        label="Pendientes"
+        value={String(data.pendientes)}
+        accent={data.pendientes > 0 ? 'warn' : 'muted'}
+      />
+      <Stat
+        icon={Clock}
+        label="Último reporte"
+        value={data.ultimoReporteEn ? formatDate(data.ultimoReporteEn) : '—'}
+        small
+      />
     </div>
   );
 }
 
+function Stat({
+  icon: Icon,
+  label,
+  value,
+  accent = 'muted',
+  small = false,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  accent?: 'warn' | 'muted';
+  small?: boolean;
+}) {
+  return (
+    <div className="vc-card p-3">
+      <div className="flex items-center gap-1.5 text-2xs font-medium uppercase tracking-wider text-fg-subtle">
+        <Icon className="size-3" />
+        {label}
+      </div>
+      <div
+        className={cn(
+          'mt-1.5 truncate font-semibold tabular-nums',
+          small ? 'text-xs text-fg-secondary' : 'text-2xl text-fg',
+          accent === 'warn' && !small && 'text-warn',
+        )}
+        title={value}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}

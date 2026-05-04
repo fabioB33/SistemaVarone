@@ -2,9 +2,10 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, X, Loader2, Send } from 'lucide-react';
+import { Check, X, Loader2, Send, AlertCircle, CheckCheck, Trash2 } from 'lucide-react';
 import { aprobarAction, descartarAction, publicarSitioAction } from '@/app/(app)/aprobacion/actions';
 import { cn } from '@/lib/utils';
+import { ConfirmDialog } from './confirm-dialog';
 
 export function AprobarButton({ id }: { id: number }) {
   const router = useRouter();
@@ -12,7 +13,7 @@ export function AprobarButton({ id }: { id: number }) {
   const [err, setErr] = useState<string | null>(null);
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-stretch gap-1">
       <button
         onClick={() =>
           start(async () => {
@@ -23,14 +24,17 @@ export function AprobarButton({ id }: { id: number }) {
           })
         }
         disabled={isPending}
-        className={cn(
-          'inline-flex items-center gap-1.5 rounded-md bg-emerald-500 px-3 py-1.5 text-xs font-medium text-emerald-950 transition hover:bg-emerald-400 disabled:opacity-50',
-        )}
+        className="vc-btn vc-btn-success vc-btn-sm"
+        aria-label="Aprobar reporte"
       >
         {isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
         Aprobar
       </button>
-      {err && <span className="text-[10px] text-red-400">{err}</span>}
+      {err && (
+        <span className="flex items-center gap-1 text-2xs text-danger">
+          <AlertCircle className="size-3" /> {err}
+        </span>
+      )}
     </div>
   );
 }
@@ -39,26 +43,57 @@ export function DescartarButton({ id }: { id: number }) {
   const router = useRouter();
   const [isPending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  function handleConfirm() {
+    setErr(null);
+    start(async () => {
+      const r = await descartarAction(id);
+      if (!r.ok) {
+        setErr(r.error || 'Error al descartar');
+        setOpen(false);
+        return;
+      }
+      setOpen(false);
+      router.refresh();
+    });
+  }
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-stretch gap-1">
       <button
-        onClick={() =>
-          start(async () => {
-            if (!confirm('¿Descartar este reporte? No llegará al sitio.')) return;
-            setErr(null);
-            const r = await descartarAction(id);
-            if (!r.ok) setErr(r.error || 'Error al descartar');
-            else router.refresh();
-          })
-        }
+        onClick={() => setOpen(true)}
         disabled={isPending}
-        className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-slate-600 hover:bg-slate-800/60 disabled:opacity-50"
+        className="vc-btn vc-btn-danger vc-btn-sm"
+        aria-label="Descartar reporte"
       >
         {isPending ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />}
         Descartar
       </button>
-      {err && <span className="text-[10px] text-red-400">{err}</span>}
+      {err && (
+        <span className="flex items-center gap-1 text-2xs text-danger">
+          <AlertCircle className="size-3" /> {err}
+        </span>
+      )}
+
+      <ConfirmDialog
+        open={open}
+        onClose={() => !isPending && setOpen(false)}
+        onConfirm={handleConfirm}
+        loading={isPending}
+        tone="danger"
+        icon={Trash2}
+        title={`¿Descartar reporte #${id}?`}
+        description={
+          <>
+            La noticia <strong className="font-medium text-fg">no llegará al sitio público</strong> y
+            quedará registrada en la papelera. Esta acción se puede revertir desde la pestaña
+            Descartados.
+          </>
+        }
+        confirmLabel="Sí, descartar"
+        cancelLabel="Cancelar"
+      />
     </div>
   );
 }
@@ -72,7 +107,7 @@ export function PublicarSitioButton({ pendientesPublicar }: { pendientesPublicar
   const disabled = isPending || pendientesPublicar === 0;
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-stretch gap-1.5">
       <button
         onClick={() =>
           start(async () => {
@@ -83,7 +118,7 @@ export function PublicarSitioButton({ pendientesPublicar }: { pendientesPublicar
               setErr(r.error || 'Error al publicar');
               return;
             }
-            setMsg(`✓ Publicado · ${r.promovidos ?? 0} reportes promovidos`);
+            setMsg(`Publicado · ${r.promovidos ?? 0} reportes promovidos`);
             router.refresh();
           })
         }
@@ -94,17 +129,37 @@ export function PublicarSitioButton({ pendientesPublicar }: { pendientesPublicar
             : `Publicar ahora ${pendientesPublicar} reporte(s) aprobado(s)`
         }
         className={cn(
-          'inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium transition',
-          disabled
-            ? 'cursor-not-allowed border border-slate-800 bg-slate-900 text-slate-500'
-            : 'bg-sky-500 text-sky-950 hover:bg-sky-400',
+          'vc-btn vc-btn-md',
+          disabled ? 'vc-btn-secondary' : 'vc-btn-primary',
         )}
       >
-        {isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-        Publicar ahora{pendientesPublicar > 0 && ` (${pendientesPublicar})`}
+        {isPending ? (
+          <>
+            <Loader2 className="size-4 animate-spin" />
+            Publicando…
+          </>
+        ) : (
+          <>
+            <Send className="size-4" />
+            <span>Publicar ahora</span>
+            {pendientesPublicar > 0 && (
+              <span className="inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-accent-fg/15 px-1.5 text-2xs font-semibold tabular-nums">
+                {pendientesPublicar}
+              </span>
+            )}
+          </>
+        )}
       </button>
-      {msg && <span className="text-[11px] text-emerald-400">{msg}</span>}
-      {err && <span className="text-[11px] text-red-400">{err}</span>}
+      {msg && (
+        <span className="flex items-center gap-1.5 text-2xs text-ok animate-fade-in">
+          <CheckCheck className="size-3" /> {msg}
+        </span>
+      )}
+      {err && (
+        <span className="flex items-center gap-1.5 text-2xs text-danger animate-fade-in">
+          <AlertCircle className="size-3" /> {err}
+        </span>
+      )}
     </div>
   );
 }

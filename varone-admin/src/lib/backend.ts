@@ -149,6 +149,9 @@ export async function publicarSitioFramer(): Promise<{
 export interface WaStatus {
   status: 'connected' | 'qr' | 'disconnected';
   qr: string | null;             // dataURL PNG si status === 'qr'
+  /** True si el cliente WA todavía no emitió ningún evento real
+   *  (estado mostrado viene del último persistido en DB). */
+  cargando?: boolean;
   groupName: string | null;
   pendientes: number;
   ultimoReporteEn: string | null;
