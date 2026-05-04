@@ -50,6 +50,29 @@ model ResumenDiario {
   @@map("resumenes_diarios")
 }
 
+// Estado persistente del bot WhatsApp.
+//
+// Singleton: una sola fila con id=1. Los handlers del cliente WA (ready,
+// disconnected, qr) actualizan esta fila. Sirve para 2 casos:
+//
+// 1) Al arrancar el backend, el panel admin puede mostrar el "último estado
+//    conocido" mientras el cliente WA tarda en inicializar (1-2 minutos
+//    de Puppeteer). Sin esto el panel arranca diciendo "esperando QR" hasta
+//    que llega el primer evento real, generando confusión.
+//
+// 2) Healthcheck cron compara `ultimoMensajeEn` con `Date.now()` para
+//    detectar bot conectado pero zombie (sin recibir mensajes >1h).
+model WaState {
+  id                Int      @id @default(1)
+  status            String   // 'connected' | 'qr' | 'disconnected'
+  ultimoCambioEn    DateTime @default(now()) @map("ultimo_cambio_en")
+  ultimoMensajeEn   DateTime? @map("ultimo_mensaje_en")
+  ultimoEvento      String?  @map("ultimo_evento")  // 'ready', 'disconnected', 'qr', etc.
+  detalles          Json?
+
+  @@map("wa_state")
+}
+
 // Audit log inmutable de acciones sensibles (aprobaciones, edits, descartes,
 // publicaciones, login). Append-only: nunca se actualizan ni borran filas.
 //

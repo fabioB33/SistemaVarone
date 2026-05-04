@@ -159,8 +159,32 @@ export async function publishNoticia(input: PublishInput): Promise<PublishResult
  */
 export async function publishSite(): Promise<{ deploymentId: string }> {
   const framer = await getFramer();
-  const result = await framer.publish();
-  await framer.deploy(result.deployment.id);
+  console.log('[framer] llamando a framer.publish()...');
+  let result;
+  try {
+    result = await framer.publish();
+  } catch (e) {
+    console.error('[framer] framer.publish() falló:', e);
+    if (e instanceof Error) {
+      console.error('  message:', e.message);
+      console.error('  stack:', e.stack);
+      console.error('  cause:', (e as { cause?: unknown }).cause);
+    }
+    throw e;
+  }
+  console.log('[framer] publish OK, deployment:', result?.deployment?.id);
+  console.log('[framer] llamando a framer.deploy()...');
+  try {
+    await framer.deploy(result.deployment.id);
+  } catch (e) {
+    console.error('[framer] framer.deploy() falló:', e);
+    if (e instanceof Error) {
+      console.error('  message:', e.message);
+      console.error('  stack:', e.stack);
+    }
+    throw e;
+  }
+  console.log('[framer] deploy OK');
   return { deploymentId: result.deployment.id };
 }
 

@@ -136,9 +136,11 @@ app.post('/og-image', async (req, res, next) => {
 });
 
 // ─── Error handler ──────────────────────────────────────────────────────────
-app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   const message = err instanceof Error ? err.message : String(err);
-  console.error('[framer-publisher] error:', message);
+  const stack = err instanceof Error ? err.stack : undefined;
+  console.error(`[framer-publisher] error en ${req.method} ${req.path}:`, message);
+  if (stack) console.error(stack);
   res.status(500).json({ error: message });
 });
 

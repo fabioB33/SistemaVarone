@@ -3,7 +3,7 @@ import { ENV } from './config/env';
 import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
-import { enviarHealthcheck } from './services/healthcheck';
+import { enviarHealthcheck, verificarSaludWaSilencioso } from './services/healthcheck';
 import { publicarSitio } from './services/framer';
 import { marcarPublicadosTrasPublish } from './services/aprobacion';
 import { backupDiario } from './services/backups';
@@ -88,6 +88,13 @@ async function main() {
   cron.schedule('0 8 * * *', async () => {
     await enviarHealthcheck();
   }, { timezone: 'America/Argentina/Buenos_Aires' });
+
+  // Cron: verificación silenciosa del bot WA cada 5 min.
+  // Solo alerta si detecta zombie (conectado sin mensajes >1h) o desconexión
+  // persistente (>15 min sin reconectar). No spamea cuando todo está OK.
+  cron.schedule('*/5 * * * *', async () => {
+    await verificarSaludWaSilencioso();
+  });
 
   // Cron: publish diario del sitio Framer a las 9:00 AM Argentina.
   // Toma todos los reportes 'aprobado' con framerItemId y hace público el sitio.

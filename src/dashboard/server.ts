@@ -22,6 +22,13 @@ setInterval(() => {
 // Estado compartido del QR y WhatsApp
 let qrData: string | null = null;
 let waStatus: 'disconnected' | 'qr' | 'connected' = 'disconnected';
+// Marca cuándo arrancó el backend. Útil para distinguir "esperando inicialización
+// del cliente Puppeteer" (los primeros ~90s tras arrancar) vs "realmente desconectado".
+const backendStartedAt = Date.now();
+// Flag que pasa a true en cuanto recibimos el primer evento real del cliente WA.
+// Hasta entonces, el endpoint /api/wa/status devuelve el último estado persistido
+// con flag `cargando: true` para que el panel no muestre "limbo" durante el boot.
+let recibimosEventoReal = false;
 
 // SSE — clientes suscritos al feed en tiempo real del grupo
 type SseClient = { res: import('express').Response; id: number };
@@ -106,15 +113,18 @@ export function incrementarMetrica(metrica: keyof Omit<typeof pipelineMetrics, '
 
 // Funciones para actualizar estado desde whatsapp.ts
 export function setQrData(qr: string) {
+  recibimosEventoReal = true;
   // emitirQR ya actualiza qrData y waStatus, y hace push via SSE
   emitirQR(qr).catch(err => console.error('[Dashboard] Error emitiendo QR via SSE:', err));
 }
 export function setWaConnected() {
+  recibimosEventoReal = true;
   waStatus = 'connected';
   qrData = null;
   emitirEstadoWA('connected');
 }
 export function setWaDisconnected() {
+  recibimosEventoReal = true;
   waStatus = 'disconnected';
   qrData = null;
   emitirEstadoWA('disconnected');
@@ -629,16 +639,42 @@ export function startDashboard(port: number = 3000) {
 
   // API: estado consolidado de WhatsApp para varone-admin.
   // Combina status, QR (si aplica), nombre del grupo y métricas básicas.
+  //
+  // Si el cliente WA todavía no emitió ningún evento real (típico durante los
+  // primeros 90s tras arrancar el backend), devuelve el último estado persistido
+  // con flag `cargando: true` para que el panel no muestre "Sin conexión" durante
+  // el boot. Una vez que llega el primer evento real, el flag se queda en false.
   app.get('/api/wa/status', async (_req, res) => {
-    const qr = qrData ? await QRCode.toDataURL(qrData, { width: 300 }) : null;
-    const pendientesCount = await prisma.reporte.count({ where: { estado: 'pendiente' } }).catch(() => 0);
-    const ultimoReporte = await prisma.reporte.findFirst({
-      orderBy: { creadoEn: 'desc' },
-      select: { creadoEn: true },
-    }).catch(() => null);
+    const { getWaStatePersisted } = await import('../services/wa-state');
+
+    let statusActual: 'connected' | 'qr' | 'disconnected' = waStatus;
+    let qrSource: string | null = qrData;
+    let cargando = false;
+
+    if (!recibimosEventoReal) {
+      const persisted = await getWaStatePersisted();
+      const segsDesdeArranque = (Date.now() - backendStartedAt) / 1000;
+      // Solo mostramos "cargando" durante los primeros 90s y si tenemos último
+      // estado persistido. Después de 90s asumimos que algo falló y caemos al
+      // status real (que va a ser 'disconnected' por defecto).
+      if (persisted && segsDesdeArranque < 90) {
+        statusActual = persisted.status;
+        cargando = true;
+      }
+    }
+
+    const qr = qrSource ? await QRCode.toDataURL(qrSource, { width: 300 }) : null;
+    const pendientesCount = await prisma.reporte
+      .count({ where: { estado: 'pendiente' } })
+      .catch(() => 0);
+    const ultimoReporte = await prisma.reporte
+      .findFirst({ orderBy: { creadoEn: 'desc' }, select: { creadoEn: true } })
+      .catch(() => null);
+
     res.json({
-      status: waStatus,
+      status: statusActual,
       qr,
+      cargando,
       groupName: ENV.WA_GROUP_NAME || null,
       pendientes: pendientesCount,
       ultimoReporteEn: ultimoReporte?.creadoEn ?? null,

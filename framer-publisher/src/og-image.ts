@@ -63,6 +63,24 @@ function concat(chunks: Uint8Array[]): Uint8Array {
   return out;
 }
 
+/**
+ * Decodifica las HTML entities mas comunes en URLs.
+ * Necesario porque algunos sitios (como La Nacion) escriben las URLs de
+ * og:image con `&amp;` en lugar de `&`, y Framer rechaza esa URL al intentar
+ * descargarla con un 400.
+ */
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+}
+
 function findMetaImage(html: string): string | null {
   // Buscar og:image (property o name) y twitter:image como fallback.
   // Tolerante al orden de atributos y comillas simples/dobles.
@@ -76,7 +94,7 @@ function findMetaImage(html: string): string | null {
 
   for (const re of candidates) {
     const m = html.match(re);
-    if (m && m[1]) return m[1].trim();
+    if (m && m[1]) return decodeHtmlEntities(m[1].trim());
   }
   return null;
 }

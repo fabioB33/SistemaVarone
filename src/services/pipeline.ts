@@ -55,16 +55,33 @@ async function procesarCola(): Promise<void> {
 }
 
 // Palabras clave del dominio — si el texto no contiene ninguna, descartarlo sin gastar quota de IA.
-// Se aplica SOLO a mensajes de texto cortos (< 300 chars). Textos largos o URLs siempre pasan.
+// Se aplica SOLO a mensajes cortos sin URL embebida. Textos largos, mensajes con URL,
+// o mensajes que son solo URL siempre pasan al siguiente filtro (la IA decide).
+//
+// Ampliado para capturar el universo "incidentes viales y policiales" en general,
+// no solo piratería del asfalto pura — Varone también quiere ver tragedias viales,
+// crímenes resonantes, asaltos a choferes/conductores, estafas relacionadas, etc.
 const KEYWORDS_DOMINIO = [
+  // Vehículos y transporte
   'camion', 'camión', 'camiones', 'carga', 'flete', 'fletero', 'chofer', 'choferes',
-  'robo', 'asalto', 'pirat', 'banda', 'delincuent', 'malvivient',
+  'colectivo', 'micro', 'taxi', 'cabify', 'didi', 'uber', 'remis', 'aplicación', 'aplicacion',
+  'auto', 'vehículo', 'vehiculo', 'moto', 'motocicleta', 'motoquero', 'motochorro',
+  'mercadería', 'mercaderia', 'contenedor', 'trailer', 'semirremolque', 'remolque', 'acoplado',
+  // Delitos
+  'robo', 'asalto', 'pirat', 'banda', 'delincuent', 'malvivient', 'ladrón', 'ladron',
+  'crimen', 'asesin', 'masacre', 'tirote', 'ataque', 'violen', 'estafa', 'fraude',
+  'tentativa', 'intento', 'sospechoso', 'sospechosa', 'detenido', 'aprehendido', 'capturado',
+  'arma', 'fierro', 'disparo', 'baleado', 'herido', 'fatal', 'víctima', 'victima',
+  // Geografía vial
   'ruta', 'autopista', 'autovia', 'autovía', 'acceso', 'km ', 'kilómetro', 'kilometro',
-  'arma', 'fierro', 'disparo', 'baleado', 'herido',
-  'detenido', 'aprehendido', 'capturado', 'polic',
-  'tentativa', 'intento', 'sospechoso', 'sospechosa', 'moto', 'motocicleta',
-  'mercadería', 'mercaderia', 'contenedor', 'trailer', 'semirremolque',
-  'blindado', 'remolque', 'acoplado', 'patente', 'ptte',
+  'asfalto', 'avenida', 'calle', 'esquina', 'colectora',
+  // Identificación
+  'patente', 'ptte', 'placa', 'dominio',
+  // Eventos viales
+  'accidente', 'choque', 'colisión', 'colision', 'atropell', 'embistió', 'embistio',
+  'tragedia', 'siniestro', 'incidente',
+  // Autoridad
+  'polic', 'comisaría', 'comisaria', 'fiscal', 'jueza', 'juez', '911',
 ];
 
 function tieneKeywordDominio(texto: string): boolean {
@@ -72,18 +89,33 @@ function tieneKeywordDominio(texto: string): boolean {
   return KEYWORDS_DOMINIO.some(kw => lower.includes(kw));
 }
 
+// Mensaje contiene al menos una URL embebida (incluso mezclada con texto).
+// Si tiene URL, asumimos que es contenido referenciado y dejamos que la IA decida.
+const URL_EMBEDDED_REGEX = /https?:\/\/\S+/;
+
 const URL_REGEX = /^https?:\/\/\S+$/;
 
 /**
- * Si el texto es una URL sola, intenta obtener el contenido de la página.
- * Extrae el texto visible de manera simple (sin dependencias extra).
- * Devuelve el texto enriquecido o el original si falla.
+ * Si el texto contiene una URL (sola o embebida), intenta obtener el contenido
+ * de la página y enriquecer. El texto original se preserva como prefijo,
+ * para que la IA tenga contexto del título/descripción que el usuario escribió.
+ *
+ * Devuelve el texto enriquecido (texto original + contenido del artículo) o el
+ * original si la URL no responde / no hay URL.
  */
 async function enriquecerSiEsUrl(texto: string, urlNoticia?: string): Promise<{ texto: string; url?: string }> {
   const trimmed = texto.trim();
-  if (!URL_REGEX.test(trimmed)) return { texto, url: urlNoticia };
 
-  const url = trimmed;
+  // Extraer la primera URL — sea el texto entero o esté embebida en mensaje largo
+  let url: string | undefined;
+  if (URL_REGEX.test(trimmed)) {
+    url = trimmed;
+  } else {
+    const match = trimmed.match(URL_EMBEDDED_REGEX);
+    if (match) url = match[0];
+  }
+
+  if (!url) return { texto, url: urlNoticia };
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), URL_FETCH_TIMEOUT_MS);
@@ -108,7 +140,14 @@ async function enriquecerSiEsUrl(texto: string, urlNoticia?: string): Promise<{ 
 
     if (sinTags.length > 100) {
       console.log(`[Pipeline] URL enriquecida: ${url.substring(0, 60)}... (${sinTags.length} chars)`);
-      return { texto: sinTags, url };
+      // Si el texto original era SOLO la URL, devolvemos el contenido del artículo.
+      // Si tenía título/descripción además de la URL, los preservamos como contexto
+      // para que la IA tenga el "framing" que escribió el usuario antes de leer el cuerpo.
+      const esSoloUrl = trimmed === url;
+      const enriquecido = esSoloUrl
+        ? sinTags
+        : `${trimmed}\n\n--- Contenido del artículo ---\n${sinTags}`;
+      return { texto: enriquecido, url };
     }
   } catch (err) {
     console.warn(`[Pipeline] No se pudo obtener contenido de URL ${url}:`, err instanceof Error ? err.message : err);
@@ -165,11 +204,15 @@ async function _procesarTexto(
     texto = enriquecido.texto;
     if (enriquecido.url) urlNoticia = enriquecido.url;
 
-    // Pre-filtro léxico: descartar sin llamar a la IA si el texto corto no tiene keywords del dominio.
-    // Textos largos (>300 chars) siempre pasan — pueden ser reportes formales o artículos.
-    if (texto.length < 300 && !tieneKeywordDominio(texto)) {
+    // Pre-filtro léxico: descartar sin llamar a la IA si:
+    //   - texto corto (<300 chars)
+    //   - sin URL embebida (los mensajes con URL son contenido referenciado, dejar que IA decida)
+    //   - sin keywords del dominio
+    // Textos largos (>300 chars) y mensajes con URL siempre pasan a la IA.
+    const tieneUrl = URL_EMBEDDED_REGEX.test(texto);
+    if (texto.length < 300 && !tieneUrl && !tieneKeywordDominio(texto)) {
       incrementarMetrica('noRelevantesDescartados');
-      console.log('[Pipeline] Descartado por pre-filtro léxico (sin keywords de dominio).');
+      console.log('[Pipeline] Descartado por pre-filtro léxico (corto + sin URL + sin keywords).');
       if (waMsgId) emitirEstadoProcesado(waMsgId, false);
       return;
     }
