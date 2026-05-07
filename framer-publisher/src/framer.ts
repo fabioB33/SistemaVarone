@@ -65,7 +65,7 @@ export interface PublishResult {
   count: number;
 }
 
-// ─── Conexión singleton ─────────────────────────────────────────────────────
+// ─── Conexión singleton con auto-reconexión ─────────────────────────────────
 
 let framerConnPromise: ReturnType<typeof connect> | null = null;
 
@@ -79,6 +79,33 @@ function getFramer() {
 
   framerConnPromise = connect(projectUrl, apiKey);
   return framerConnPromise;
+}
+
+/**
+ * Resetea la conexión singleton. Se invoca cuando detectamos errores de
+ * "Connection closed" para forzar una nueva conexión en el próximo getFramer().
+ */
+function resetConnection(): void {
+  framerConnPromise = null;
+}
+
+/**
+ * Wrapper que ejecuta una operación contra Framer y reintenta una vez si la
+ * conexión está cerrada. El SDK de framer-api a veces cierra la conexión tras
+ * inactividad y la singleton queda en estado inválido.
+ */
+async function withReconnect<T>(op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Connection closed') || msg.includes('disconnected')) {
+      console.warn('[framer] conexión cerrada, reconectando y reintentando...');
+      resetConnection();
+      return await op();
+    }
+    throw err;
+  }
 }
 
 export async function disconnectFramer(): Promise<void> {
@@ -124,6 +151,7 @@ async function getNextCount(): Promise<number> {
  * No publica el sitio: el item queda en draft hasta que llamemos a publishSite().
  */
 export async function publishNoticia(input: PublishInput): Promise<PublishResult> {
+  return withReconnect(async () => {
   const notas = await getNotasCollection();
   const count = await getNextCount();
 
@@ -151,6 +179,26 @@ export async function publishNoticia(input: PublishInput): Promise<PublishResult
   if (!created) throw new Error('Item no encontrado luego de addItems');
 
   return { itemId: created.id, slug: created.slug, count };
+  });
+}
+
+/**
+ * Borra un item de la collection "Notas" por su itemId.
+ * No publica el sitio — para que el cambio sea visible en el sitio público
+ * hay que llamar después a publishSite().
+ *
+ * Retorna true si el borrado fue exitoso, false si el item no existía.
+ */
+export async function removeNoticia(itemId: string): Promise<boolean> {
+  return withReconnect(async () => {
+    const notas = await getNotasCollection();
+    // Verificar primero que el item existe (evita errores opacos del SDK).
+    const items = await notas.getItems();
+    const exists = (items as any[]).some((i) => i.id === itemId);
+    if (!exists) return false;
+    await notas.removeItems([itemId]);
+    return true;
+  });
 }
 
 /**
@@ -158,6 +206,7 @@ export async function publishNoticia(input: PublishInput): Promise<PublishResult
  * Re-publica todo el sitio con los cambios pendientes en CMS.
  */
 export async function publishSite(): Promise<{ deploymentId: string }> {
+  return withReconnect(async () => {
   const framer = await getFramer();
   console.log('[framer] llamando a framer.publish()...');
   let result;
@@ -186,6 +235,7 @@ export async function publishSite(): Promise<{ deploymentId: string }> {
   }
   console.log('[framer] deploy OK');
   return { deploymentId: result.deployment.id };
+  });
 }
 
 /**
@@ -194,12 +244,14 @@ export async function publishSite(): Promise<{ deploymentId: string }> {
 export async function listNoticias(): Promise<
   Array<{ id: string; slug: string; title: string; count: number }>
 > {
-  const notas = await getNotasCollection();
-  const items = await notas.getItems();
-  return (items as any[]).map((i) => ({
-    id: i.id,
-    slug: i.slug,
-    title: i.fieldData?.[FIELDS.title]?.value ?? '',
-    count: i.fieldData?.[FIELDS.count]?.value ?? 0,
-  }));
+  return withReconnect(async () => {
+    const notas = await getNotasCollection();
+    const items = await notas.getItems();
+    return (items as any[]).map((i) => ({
+      id: i.id,
+      slug: i.slug,
+      title: i.fieldData?.[FIELDS.title]?.value ?? '',
+      count: i.fieldData?.[FIELDS.count]?.value ?? 0,
+    }));
+  });
 }

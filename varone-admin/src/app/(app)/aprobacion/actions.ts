@@ -5,6 +5,7 @@ import { getSession } from '@/lib/auth';
 import {
   aprobarReporte,
   descartarReporte,
+  despublicarReporte,
   editarReporteBackend,
   publicarSitioFramer,
   type ReporteEditableFields,
@@ -26,6 +27,13 @@ export async function aprobarAction(id: number) {
 export async function descartarAction(id: number) {
   const user = await requireUser();
   const result = await descartarReporte(id, user);
+  revalidatePath('/aprobacion');
+  return result;
+}
+
+export async function despublicarAction(id: number) {
+  const user = await requireUser();
+  const result = await despublicarReporte(id, user);
   revalidatePath('/aprobacion');
   return result;
 }

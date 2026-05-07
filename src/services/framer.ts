@@ -165,6 +165,48 @@ export async function enviarAFramer(
 }
 
 /**
+ * Borra un item de la collection "Notas" en Framer.
+ * Usado por el flujo de despublicar (botón del panel cuando Varone detecta
+ * que la IA auto-publicó algo mal).
+ *
+ * El borrado en Framer NO publica el sitio automáticamente — el caller
+ * debe llamar a publicarSitio() después para que el cambio sea visible
+ * en producción.
+ */
+export async function borrarItemFramer(itemId: string): Promise<boolean> {
+  if (!ENV.FRAMER_PUBLISHER_URL) {
+    logger.warn('[Framer] FRAMER_PUBLISHER_URL no configurado, no se puede borrar.');
+    return false;
+  }
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (ENV.FRAMER_PUBLISHER_TOKEN) {
+        headers['X-Publisher-Token'] = ENV.FRAMER_PUBLISHER_TOKEN;
+      }
+      const res = await fetch(
+        `${ENV.FRAMER_PUBLISHER_URL}/noticia/${encodeURIComponent(itemId)}`,
+        { method: 'DELETE', headers, signal: ctrl.signal },
+      );
+      const json = (await res.json().catch(() => ({}))) as PublisherResponse;
+      if (!res.ok) {
+        logger.error(`[Framer] DELETE item ${itemId} falló: HTTP ${res.status}: ${json.error || res.statusText}`);
+        return false;
+      }
+      logger.info(`[Framer] Item ${itemId} borrado de la collection.`);
+      return true;
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (error) {
+    logger.error(`[Framer] Error borrando item ${itemId}:`, error);
+    return false;
+  }
+}
+
+/**
  * Dispara un publish del sitio sin crear nada nuevo.
  * Útil para el cron diario y el botón "Publicar ahora" del dashboard.
  */

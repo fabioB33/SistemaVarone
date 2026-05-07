@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { type ReporteListItem } from '@/lib/backend';
 import { formatDate, cn } from '@/lib/utils';
-import { AprobarButton, DescartarButton } from './accion-buttons';
+import { AprobarButton, DescartarButton, DespublicarButton } from './accion-buttons';
 import { EditarReporteDialog } from './editar-reporte-dialog';
 
 interface Props {
@@ -110,10 +110,21 @@ export function ReporteCard({ reporte, showActions = false }: Props) {
 
         {/* Acciones */}
         {showActions && reporte.estado === 'pendiente' && (
+          // Estado pendiente solo aparece si Framer falló en el primer envío
+          // del flujo auto. El cron retry lo levanta solo cada 15min.
+          // Igual mostramos Aprobar/Editar/Descartar manuales por si Varone
+          // quiere intervenir mientras tanto.
           <div className="flex flex-col gap-2 sm:min-w-[10rem] sm:items-stretch">
             <AprobarButton id={reporte.id} />
             <EditarReporteDialog reporte={reporte} />
             <DescartarButton id={reporte.id} />
+          </div>
+        )}
+        {showActions && (reporte.estado === 'aprobado' || reporte.estado === 'publicado') && (
+          // Bypass humano del modo full-auto: si la IA auto-publicó algo mal,
+          // Despublicar lo borra de Framer + re-publica el sitio + marca descartado.
+          <div className="flex flex-col gap-2 sm:min-w-[10rem] sm:items-stretch">
+            <DespublicarButton id={reporte.id} />
           </div>
         )}
       </div>

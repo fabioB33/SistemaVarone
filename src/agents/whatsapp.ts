@@ -1,4 +1,6 @@
 import logger from '../services/logger';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { Client, LocalAuth, Message } from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { MensajeWhatsApp } from '../types';
@@ -7,6 +9,42 @@ import { procesarTexto } from '../services/pipeline';
 import { setQrData, setWaConnected, setWaDisconnected, notificarDesconexion, emitirMensajeGrupo } from '../dashboard/server';
 import { registrarClienteWA, notificar } from '../services/notificaciones';
 import { setWaStateStatus, bumpWaStateUltimoMensaje } from '../services/wa-state';
+
+const execAsync = promisify(exec);
+
+/**
+ * Mata cualquier chromium huérfano que haya quedado lockeando .wwebjs_auth/session/.
+ * Se invoca antes de un re-init cuando detectamos error "browser already running".
+ *
+ * Sin esto, el cliente queda zombie indefinidamente: client.destroy() no termina
+ * el proceso chromium subyacente cuando Puppeteer perdió el handle, y cada
+ * subsiguiente initialize() falla porque el userDataDir sigue lockeado.
+ *
+ * Solo mata procesos cuya línea de comando contenga "wwebjs_auth/session" —
+ * NO toca otros chromiums (Brave, VSCode, Puppeteer de otros proyectos).
+ */
+async function matarChromiumHuerfano(): Promise<void> {
+  try {
+    await execAsync('pkill -9 -f "wwebjs_auth/session"');
+    logger.warn('[WhatsApp] Chromium huérfano matado para liberar userDataDir lock.');
+    // Pequeña espera para que el OS libere el lock del filesystem.
+    await new Promise(resolve => setTimeout(resolve, 2_000));
+  } catch (e) {
+    // pkill exit 1 = no había procesos para matar (caso normal y esperado).
+    // execAsync envuelve el error con `code` como propiedad del error o como
+    // string en el message. Chequeamos ambos para evitar el log spurio.
+    const err = e as { code?: number; message?: string };
+    const exitCode = err.code;
+    const messageHasExit1 = err.message?.includes('exit code 1') ||
+                            err.message?.includes('Command failed: pkill');
+    if (exitCode === 1 || messageHasExit1) {
+      // Caso normal: no había chromium para matar. Log debug, no error.
+      logger.info('[WhatsApp] matarChromiumHuerfano: no había procesos (esperado).');
+      return;
+    }
+    logger.error('[WhatsApp] matarChromiumHuerfano: error inesperado:', e);
+  }
+}
 
 // Reconexión con backoff exponencial
 const RECONEXION_BASE_MS = 10_000;   // 10s primer intento
@@ -87,39 +125,77 @@ function dentroDeLimite(senderId: string): boolean {
 }
 
 async function procesarHistorialGrupo(): Promise<void> {
+  // El chat de WA Web puede no haber terminado de cargar al momento del 'ready'.
+  // fetchMessages() llama internamente a waitForChatLoading que requiere que el
+  // chat ya esté abierto en la UI. Esperamos antes de intentar y reintentamos
+  // si falla, en vez de tirar el error y dejar el bot zombie.
+  await new Promise(resolve => setTimeout(resolve, 8_000));
+
+  let chats: Awaited<ReturnType<typeof client.getChats>>;
   try {
-    const chats = await client.getChats();
-    const grupo = chats.find(c => c.isGroup && c.name === ENV.WA_GROUP_NAME);
-
-    if (!grupo) {
-      logger.warn(`[WhatsApp] Grupo "${ENV.WA_GROUP_NAME}" no encontrado al reconectar.`);
-      return;
-    }
-
-    logger.info(`[WhatsApp] Procesando historial del grupo "${grupo.name}"...`);
-    const mensajes = await grupo.fetchMessages({ limit: 50 });
-
-    let procesados = 0;
-    for (const msg of mensajes.reverse()) {
-      // Solo mensajes de las últimas 2 horas para no procesar cosas viejas
-      const hace2hs = Date.now() / 1000 - 2 * 60 * 60;
-      if (msg.timestamp < hace2hs) continue;
-      if (!msg.body || msg.body.trim().length < 15) continue;
-
-      procesadosAlReconectar.add(msg.id.id);
-      await procesarTexto(msg.body, 'whatsapp');
-      procesados++;
-    }
-
-    logger.info(`[WhatsApp] Historial procesado: ${procesados} mensajes recientes analizados.`);
+    chats = await client.getChats();
   } catch (error) {
-    logger.error('[WhatsApp] Error procesando historial:', error);
+    logger.error('[WhatsApp] Error obteniendo lista de chats:', error);
+    return;
   }
+
+  const grupo = chats.find(c => c.isGroup && c.name === ENV.WA_GROUP_NAME);
+  if (!grupo) {
+    logger.warn(`[WhatsApp] Grupo "${ENV.WA_GROUP_NAME}" no encontrado al reconectar.`);
+    return;
+  }
+
+  logger.info(`[WhatsApp] Procesando historial del grupo "${grupo.name}"...`);
+
+  // Reintenta hasta 3 veces con backoff: el chat suele estar listo al 2do intento.
+  const MAX_INTENTOS = 3;
+  let mensajes: Awaited<ReturnType<typeof grupo.fetchMessages>> | null = null;
+  for (let i = 1; i <= MAX_INTENTOS; i++) {
+    try {
+      mensajes = await grupo.fetchMessages({ limit: 50 });
+      break;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.warn(`[WhatsApp] fetchMessages intento ${i}/${MAX_INTENTOS} falló: ${msg.slice(0, 100)}`);
+      if (i < MAX_INTENTOS) {
+        await new Promise(resolve => setTimeout(resolve, i * 5_000));
+      }
+    }
+  }
+
+  if (!mensajes) {
+    logger.error('[WhatsApp] Historial no procesado tras reintentos. Mensajes en vivo siguen funcionando.');
+    return;
+  }
+
+  let procesados = 0;
+  for (const msg of mensajes.reverse()) {
+    // Solo mensajes de las últimas 2 horas para no procesar cosas viejas
+    const hace2hs = Date.now() / 1000 - 2 * 60 * 60;
+    if (msg.timestamp < hace2hs) continue;
+    if (!msg.body || msg.body.trim().length < 15) continue;
+
+    procesadosAlReconectar.add(msg.id.id);
+    await procesarTexto(msg.body, 'whatsapp');
+    procesados++;
+  }
+
+  logger.info(`[WhatsApp] Historial procesado: ${procesados} mensajes recientes analizados.`);
 }
 
 export function iniciarWhatsApp(): void {
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: '.wwebjs_auth' }),
+    // Pin de versión de WhatsApp Web: WA Web rota su frontend con frecuencia y
+    // el scraper interno de whatsapp-web.js queda fuera de sync, produciendo
+    // errores como "Cannot read properties of undefined (reading
+    // 'waitForChatLoading')". Pinear un HTML estable de wppconnect-team/wa-version
+    // evita el bug. Cuando whatsapp-web.js publique fix oficial, sacar este bloque.
+    webVersionCache: {
+      type: 'remote',
+      remotePath:
+        'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1034733596-alpha.html',
+    },
     puppeteer: {
       headless: true,
       // protocolTimeout: WhatsApp Web a veces tarda >30s en cargar (default Puppeteer
@@ -317,6 +393,11 @@ export function iniciarWhatsApp(): void {
  * Reinicia el cliente WhatsApp de forma segura: destroy + delay + initialize.
  * El delay es CRÍTICO porque Puppeteer no libera inmediatamente el lock del
  * userDataDir; hacer initialize() inmediatamente falla con "browser already running".
+ *
+ * Si tras destroy + delay el initialize() sigue fallando con "browser already running",
+ * significa que quedó un chromium huérfano (Puppeteer perdió el handle del proceso
+ * pero el proceso chromium sigue vivo lockeando el userDataDir). En ese caso lo
+ * matamos a nivel OS y reintentamos una vez más.
  */
 async function reiniciarClienteSeguro(origen: string): Promise<void> {
   try {
@@ -331,8 +412,25 @@ async function reiniciarClienteSeguro(origen: string): Promise<void> {
   try {
     await client.initialize();
     logger.info(`[WhatsApp] [${origen}] cliente reiniciado correctamente.`);
+    return;
   } catch (e) {
-    logger.error(`[WhatsApp] [${origen}] re-init falló:`, e);
+    const errMsg = e instanceof Error ? e.message : String(e);
+    const esBrowserLock = errMsg.includes('browser is already running') ||
+                          errMsg.includes('userDataDir') ||
+                          errMsg.includes('SingletonLock');
+    if (!esBrowserLock) {
+      logger.error(`[WhatsApp] [${origen}] re-init falló:`, e);
+      return;
+    }
+    logger.warn(`[WhatsApp] [${origen}] re-init falló por chromium huérfano. Limpiando y reintentando una vez...`);
+    await matarChromiumHuerfano();
+    armarInitWatchdog();
+    try {
+      await client.initialize();
+      logger.info(`[WhatsApp] [${origen}] cliente reiniciado tras cleanup de chromium huérfano.`);
+    } catch (e2) {
+      logger.error(`[WhatsApp] [${origen}] re-init post-cleanup también falló:`, e2);
+    }
   }
 }
 

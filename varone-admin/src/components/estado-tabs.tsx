@@ -14,10 +14,10 @@ interface TabDef {
 }
 
 const TABS: readonly TabDef[] = [
-  { value: 'pendiente',  label: 'Pendientes',  hint: 'esperando decisión',     icon: Inbox,        accent: 'warn'  },
-  { value: 'aprobado',   label: 'Aprobados',   hint: 'cola para publicar',     icon: CheckCircle2, accent: 'info'  },
-  { value: 'publicado',  label: 'Publicados',  hint: 'visibles en el sitio',   icon: Globe,        accent: 'ok'    },
-  { value: 'descartado', label: 'Descartados', hint: 'papelera',               icon: Trash2,       accent: 'muted' },
+  { value: 'pendiente',  label: 'Reintentando',          hint: 'fallaron en Framer, reintenta cron 15min', icon: Inbox,        accent: 'warn'  },
+  { value: 'aprobado',   label: 'Listos para publicar',  hint: 'IA aprobó, espera cron publish 9 AM o 21 hs', icon: CheckCircle2, accent: 'info'  },
+  { value: 'publicado',  label: 'Publicados',            hint: 'visibles en el sitio',                     icon: Globe,        accent: 'ok'    },
+  { value: 'descartado', label: 'Descartados',           hint: 'papelera (descartado por IA o despublicado)', icon: Trash2,       accent: 'muted' },
 ];
 
 interface Props {

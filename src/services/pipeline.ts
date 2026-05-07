@@ -1,11 +1,12 @@
 import { analizarConIA } from './ia';
 import { existeDuplicado, registrarReporte, obtenerPendientesFramer } from './dedup';
 import { enviarAFramer } from './framer';
+import { aprobarPorIA } from './aprobacion';
 import { incrementarMetrica, emitirEstadoProcesado } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
 import { ENV } from '../config/env';
 import logger from './logger';
-import { notificarReportePendiente } from './notificaciones';
+import { notificarReporteAutopublicado } from './notificaciones';
 
 // F2: detectar spike — si entran N reportes relevantes en una ventana de tiempo, alertar
 const SPIKE_VENTANA_MS = 10 * 60 * 1000;  // 10 minutos
@@ -39,7 +40,7 @@ const PIPELINE_TIMEOUT_MS = 30_000;
 const URL_FETCH_TIMEOUT_MS = 10_000;
 
 // Cola FIFO para procesar mensajes de a uno — evita rate limit cuando llegan ráfagas
-type ColaItem = { texto: string; fuente: 'whatsapp' | 'scraping'; urlNoticia?: string; portalOrigen?: string; waMsgId?: string };
+type ColaItem = { texto: string; fuente: 'whatsapp'; urlNoticia?: string; portalOrigen?: string; waMsgId?: string };
 const cola: ColaItem[] = [];
 let colaCorreindo = false;
 
@@ -166,7 +167,7 @@ function conTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<
 
 /**
  * Pipeline principal:
- * 1. Recibe texto crudo (de WA o scraper)
+ * 1. Recibe texto crudo del agente WhatsApp (o de inyección manual)
  * 2. Verifica duplicados en PostgreSQL (antes de llamar a la IA para ahorrar API quota)
  * 3. Lo envía a la IA para clasificar y estructurar
  * 4. Si es nuevo y relevante, lo registra y lo envía a Framer
@@ -178,7 +179,7 @@ function conTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<
  */
 export function procesarTexto(
   texto: string,
-  fuente: 'whatsapp' | 'scraping',
+  fuente: 'whatsapp',
   urlNoticia?: string,
   portalOrigen?: string,
   waMsgId?: string
@@ -191,7 +192,7 @@ export function procesarTexto(
 
 async function _procesarTexto(
   texto: string,
-  fuente: 'whatsapp' | 'scraping',
+  fuente: 'whatsapp',
   urlNoticia?: string,
   portalOrigen?: string,
   waMsgId?: string
@@ -241,26 +242,41 @@ async function _procesarTexto(
     if (urlNoticia) reporte.urlNoticia = urlNoticia;
     if (portalOrigen) reporte.portalOrigen = portalOrigen;
 
-    // Registrar en DB con estado=pendiente (espera aprobación humana en dashboard)
+    // Registrar en DB. El default del schema es estado='pendiente'; lo
+    // transicionamos a 'aprobado' después si el envío a Framer tiene éxito.
     const datosReporte: Record<string, unknown> = { ...reporte };
     const reporteId = await registrarReporte(texto, datosReporte);
     incrementarMetrica('reportesRegistrados');
     await verificarSpike();
 
-    // El envío a Framer se dispara desde el dashboard al aprobar el reporte.
-    // Acá solo lo dejamos en cola de revisión.
-    logger.info(`[Pipeline] Reporte #${reporteId} en cola de aprobación: ${reporte.tipoIncidente} en ${reporte.ubicacion}`);
+    // ── Auto-publicación por IA ──────────────────────────────────────────
+    // Modo full-auto: la IA marcó el reporte como relevante → lo enviamos
+    // directo a Framer como item draft. Si el envío tiene éxito, lo
+    // marcamos 'aprobado' con actor='ai-auto'. El cron de publish (9 AM
+    // y 21:00 hs Argentina) se encarga después de hacerlo público en el sitio.
+    //
+    // Si el envío a Framer falla, el reporte queda en 'pendiente' y el cron
+    // reintentarFramerPendientes() lo levanta cada 15 min con backoff exponencial.
+    logger.info(`[Pipeline] Reporte #${reporteId} aceptado por IA: ${reporte.tipoIncidente} en ${reporte.ubicacion}. Enviando a Framer (auto)...`);
 
-    // Notificación al celular de Varone con links Aprobar/Descartar/Editar.
-    // No bloquea el pipeline si falla el envío.
-    void notificarReportePendiente({
-      id: reporteId,
-      tipoIncidente: reporte.tipoIncidente,
-      ubicacion: reporte.ubicacion,
-      ruta: reporte.ruta,
-      fecha: reporte.fecha,
-      descripcion: reporte.descripcion,
-    }).catch(e => logger.error('[Pipeline] Error notificando reporte pendiente:', e));
+    const framerResult = await enviarAFramer(reporte, reporteId, { publishSite: false });
+
+    if (framerResult) {
+      await aprobarPorIA(reporteId, framerResult.itemId, framerResult.slug);
+      logger.info(`[Pipeline] Reporte #${reporteId} auto-aprobado por IA → Framer item ${framerResult.itemId}`);
+
+      // Notificación informativa a Varone (sin links de aprobar/descartar — la IA ya decidió)
+      void notificarReporteAutopublicado({
+        id: reporteId,
+        tipoIncidente: reporte.tipoIncidente,
+        ubicacion: reporte.ubicacion,
+        ruta: reporte.ruta,
+        fecha: reporte.fecha,
+        descripcion: reporte.descripcion,
+      }).catch(e => logger.error('[Pipeline] Error notificando auto-publicación:', e));
+    } else {
+      logger.warn(`[Pipeline] Reporte #${reporteId} queda en 'pendiente' — Framer falló, se reintenta en 15min.`);
+    }
 
     if (waMsgId) emitirEstadoProcesado(waMsgId, true, { gravedad: reporte.gravedad, ubicacion: reporte.ubicacion });
     console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente})`);
@@ -312,12 +328,19 @@ export async function reintentarFramerPendientes(): Promise<void> {
         descripcion: r.descripcion,
         vehiculo: r.vehiculo ?? undefined,
         patente: r.patente ?? undefined,
-        fuente: r.fuente as 'whatsapp' | 'scraping',
+        fuente: r.fuente as 'whatsapp',
         urlNoticia: r.urlNoticia ?? undefined,
         victimas: r.victimas ?? undefined,
         detenidos: r.detenidos ?? undefined,
       };
-      await enviarAFramer(reporte as ReporteIncidente, r.id);
+      const result = await enviarAFramer(reporte as ReporteIncidente, r.id);
+      // Si el reporte estaba en 'pendiente' (auto-flow falló en primer envío)
+      // y el retry tuvo éxito, transicionamos a 'aprobado' por IA — mismo
+      // tratamiento que cuando el primer intento sale bien en _procesarTexto().
+      if (result && r.estado === 'pendiente') {
+        await aprobarPorIA(r.id, result.itemId, result.slug);
+        logger.info(`[Pipeline] Retry exitoso: reporte #${r.id} transicionado a 'aprobado' por IA.`);
+      }
     }
   } finally {
     reintentandoFramer = false;

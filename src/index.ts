@@ -7,6 +7,7 @@ import { enviarHealthcheck, verificarSaludWaSilencioso } from './services/health
 import { publicarSitio } from './services/framer';
 import { marcarPublicadosTrasPublish } from './services/aprobacion';
 import { backupDiario } from './services/backups';
+import { ejecutarChequeosIA } from './services/health-ai';
 import logger from './services/logger';
 
 // Validar variables de entorno críticas antes de arrancar
@@ -96,23 +97,38 @@ async function main() {
     await verificarSaludWaSilencioso();
   });
 
-  // Cron: publish diario del sitio Framer a las 9:00 AM Argentina.
+  // Cron: publish del sitio Framer 2x/día (9:00 AM y 21:00 hs Argentina).
   // Toma todos los reportes 'aprobado' con framerItemId y hace público el sitio.
-  cron.schedule('0 9 * * *', async () => {
-    logger.info('[Cron] Iniciando publicación diaria del sitio Framer...');
+  // Modo full-auto (2026-05-05+): el grueso de los reportes los aprueba la IA
+  // sola → publish 2 veces al día equilibra "frescura del sitio" vs "no saturar
+  // a Framer con 1 deploy por noticia".
+  async function publishCronJob(label: string): Promise<void> {
+    logger.info(`[Cron] Iniciando publicación del sitio Framer (${label})...`);
     const result = await publicarSitio();
     if (!result) {
-      logger.error('[Cron] Falló la publicación diaria del sitio.');
+      logger.error(`[Cron] Falló la publicación (${label}).`);
       return;
     }
     const promovidos = await marcarPublicadosTrasPublish();
-    logger.info(`[Cron] Sitio publicado (${result.deploymentId}). Reportes promovidos: ${promovidos}`);
-  }, { timezone: 'America/Argentina/Buenos_Aires' });
+    logger.info(`[Cron] Sitio publicado (${label}, ${result.deploymentId}). Reportes promovidos: ${promovidos}`);
+  }
+  cron.schedule('0 9 * * *', () => publishCronJob('9 AM'),
+    { timezone: 'America/Argentina/Buenos_Aires' });
+  cron.schedule('0 21 * * *', () => publishCronJob('21:00'),
+    { timezone: 'America/Argentina/Buenos_Aires' });
 
   // Cron: backup diario de la DB a las 3:00 AM Argentina (hora de menor actividad).
   // El archivo va a backups/varone-YYYY-MM-DD.dump y se mantiene 30 días.
   cron.schedule('0 3 * * *', async () => {
     await backupDiario();
+  }, { timezone: 'America/Argentina/Buenos_Aires' });
+
+  // Cron: chequeos de comportamiento de la IA cada hora.
+  // Detecta 4 modos de falla del modo full-auto: silencio sospechoso, spike,
+  // pendientes colgados, distribución sospechosa. Cada alerta tiene dedup de
+  // 6h para no spamear cuando una condición persiste.
+  cron.schedule('15 * * * *', async () => {
+    await ejecutarChequeosIA();
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 }
 

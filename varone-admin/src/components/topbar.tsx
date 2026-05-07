@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { LogOut, Truck } from 'lucide-react';
+import { AlertasBadge } from './alertas-badge';
 
 interface Props {
   user: string;
@@ -42,6 +43,7 @@ export function Topbar({ user }: Props) {
 
         {/* Right cluster */}
         <div className="flex items-center gap-3">
+          <AlertasBadge />
           <div className="hidden items-center gap-2 rounded-full border border-line bg-surface/60 px-3 py-1.5 text-xs sm:flex">
             <span className="text-fg-muted">Sesión</span>
             <span className="size-1 rounded-full bg-fg-subtle" />

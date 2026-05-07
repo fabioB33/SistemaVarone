@@ -21,6 +21,7 @@ import {
   publishNoticia,
   publishSite,
   listNoticias,
+  removeNoticia,
   disconnectFramer,
   type PublishInput,
 } from './framer.js';
@@ -107,6 +108,24 @@ app.post('/noticia', async (req, res, next) => {
 
     const result = await publishNoticia(input);
     res.json({ ok: true, ...result, imageUrl: imageUrl ?? null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/noticia/:itemId', async (req, res, next) => {
+  try {
+    const itemId = String(req.params.itemId || '').trim();
+    if (!itemId) {
+      res.status(400).json({ error: 'itemId requerido' });
+      return;
+    }
+    const removed = await removeNoticia(itemId);
+    if (!removed) {
+      res.status(404).json({ ok: false, error: 'Item no encontrado en Framer' });
+      return;
+    }
+    res.json({ ok: true, itemId, removed: true });
   } catch (err) {
     next(err);
   }

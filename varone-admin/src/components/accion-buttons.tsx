@@ -2,8 +2,13 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, X, Loader2, Send, AlertCircle, CheckCheck, Trash2 } from 'lucide-react';
-import { aprobarAction, descartarAction, publicarSitioAction } from '@/app/(app)/aprobacion/actions';
+import { Check, X, Loader2, Send, AlertCircle, CheckCheck, Trash2, Undo2 } from 'lucide-react';
+import {
+  aprobarAction,
+  descartarAction,
+  despublicarAction,
+  publicarSitioAction,
+} from '@/app/(app)/aprobacion/actions';
 import { cn } from '@/lib/utils';
 import { ConfirmDialog } from './confirm-dialog';
 
@@ -92,6 +97,66 @@ export function DescartarButton({ id }: { id: number }) {
           </>
         }
         confirmLabel="Sí, descartar"
+        cancelLabel="Cancelar"
+      />
+    </div>
+  );
+}
+
+export function DespublicarButton({ id }: { id: number }) {
+  const router = useRouter();
+  const [isPending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  function handleConfirm() {
+    setErr(null);
+    start(async () => {
+      const r = await despublicarAction(id);
+      if (!r.ok) {
+        setErr(r.error || 'Error al despublicar');
+        setOpen(false);
+        return;
+      }
+      setOpen(false);
+      router.refresh();
+    });
+  }
+
+  return (
+    <div className="flex flex-col items-stretch gap-1">
+      <button
+        onClick={() => setOpen(true)}
+        disabled={isPending}
+        className="vc-btn vc-btn-danger vc-btn-sm"
+        aria-label="Despublicar reporte"
+        title="Sacar esta nota del sitio público"
+      >
+        {isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Undo2 className="size-3.5" />}
+        Despublicar
+      </button>
+      {err && (
+        <span className="flex items-center gap-1 text-2xs text-danger">
+          <AlertCircle className="size-3" /> {err}
+        </span>
+      )}
+
+      <ConfirmDialog
+        open={open}
+        onClose={() => !isPending && setOpen(false)}
+        onConfirm={handleConfirm}
+        loading={isPending}
+        tone="danger"
+        icon={Undo2}
+        title={`¿Despublicar reporte #${id}?`}
+        description={
+          <>
+            La nota se va a <strong className="font-medium text-fg">borrar de Framer</strong> y el
+            sitio público se va a re-publicar para que desaparezca. Esta acción es necesaria si la
+            IA auto-publicó algo incorrecto. Queda registrado en el audit log.
+          </>
+        }
+        confirmLabel="Sí, despublicar"
         cancelLabel="Cancelar"
       />
     </div>

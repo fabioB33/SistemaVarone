@@ -12,8 +12,8 @@ export async function existeDuplicado(texto: string, urlNoticia?: string): Promi
   const porHash = await prisma.reporte.findUnique({ where: { hash } });
   if (porHash) return true;
 
-  // R5: verificar también por URL — evita duplicados cuando alguien comparte
-  // un link en WhatsApp que el scraper también encontró (mismo artículo, texto distinto)
+  // R5: verificar también por URL — evita duplicados cuando dos personas
+  // comparten el mismo link en WhatsApp con texto distinto (mismo artículo).
   if (urlNoticia) {
     const porUrl = await prisma.reporte.findFirst({ where: { urlNoticia } });
     if (porUrl) return true;
@@ -66,13 +66,19 @@ export async function incrementarIntentosFramer(id: number): Promise<void> {
   });
 }
 
-// Reportes APROBADOS que aún no se sincronizaron con Framer (errores transitorios).
+// Reportes que aún no se sincronizaron con Framer (errores transitorios).
 // El cron de reintentos los procesa con backoff exponencial.
-// Reportes en estado 'pendiente' o 'descartado' nunca se envían (gate humano del dashboard).
+//
+// Modo full-auto (2026-05-05+): incluimos los que quedaron en 'pendiente'
+// porque el primer intento de Framer falló. El cron retry los reintenta y
+// si tienen éxito los transiciona a 'aprobado' vía aprobarPorIA().
+//
+// También incluimos 'aprobado' por compatibilidad con el modo manual antiguo.
+// Los 'descartado' nunca se envían.
 export async function obtenerPendientesFramer() {
   return prisma.reporte.findMany({
     where: {
-      estado: 'aprobado',
+      estado: { in: ['pendiente', 'aprobado'] },
       framerEnviado: false,
       framerIntentos: { lt: 5 },
     },

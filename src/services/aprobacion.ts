@@ -99,7 +99,7 @@ export async function aprobar(
     patente: r.patente ?? undefined,
     victimas: r.victimas ?? undefined,
     detenidos: r.detenidos ?? undefined,
-    fuente: r.fuente as 'whatsapp' | 'scraping',
+    fuente: r.fuente as 'whatsapp',
     urlNoticia: r.urlNoticia ?? undefined,
     portalOrigen: r.portalOrigen ?? undefined,
     textoOriginal: r.textoOriginal,
@@ -350,4 +350,120 @@ export async function marcarPublicadosTrasPublish(): Promise<number> {
     data: { estado: 'publicado' },
   });
   return result.count;
+}
+
+/**
+ * Auto-aprobación por la IA: el pipeline llamó a IA, fue marcado relevante,
+ * el envío a Framer ya se hizo con éxito (publishSite=false → item draft).
+ * Acá solo persistimos en DB el estado=aprobado + audit log con actor='ai-auto'.
+ *
+ * El reporte ya fue creado por registrarReporte() antes con estado='pendiente'
+ * (default del schema). Esta función transiciona pendiente → aprobado de
+ * forma atómica con la metadata correcta.
+ *
+ * Si el envío a Framer falló, NO se llama esta función — el reporte queda
+ * en 'pendiente' y el cron reintentarFramerPendientes() lo levanta después.
+ */
+export async function aprobarPorIA(
+  id: number,
+  framerItemId: string,
+  framerSlug: string,
+): Promise<void> {
+  await prisma.reporte.update({
+    where: { id },
+    data: {
+      estado: 'aprobado',
+      aprobadoPor: 'ai-auto',
+      aprobadoEn: new Date(),
+      framerItemId,
+      framerSlug,
+    },
+  });
+  void registrarAccion({
+    evento: 'aprobar.ai-auto',
+    actor: 'ai-auto',
+    origen: 'system',
+    reporteId: id,
+    meta: { framerItemId, framerSlug },
+  });
+}
+
+/**
+ * Despublica un reporte ya publicado (o aprobado) desde el panel admin.
+ * Es el bypass humano para corregir errores de la IA.
+ *
+ * Pasos:
+ *  1. Marca el reporte como 'descartado' en DB.
+ *  2. Borra el item de la collection en Framer (vía publisher).
+ *  3. Re-publica el sitio para que el item desaparezca del público.
+ *
+ * Si el paso 2 o 3 falla, el reporte igual queda 'descartado' en DB y
+ * se notifica al usuario que tiene que verificar manualmente en Framer.
+ */
+export async function despublicar(
+  id: number,
+  despublicadoPor: string,
+  ctx: ActorContext = {},
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const origen = ctx.origen ?? 'panel';
+  const r = await prisma.reporte.findUnique({ where: { id } });
+  if (!r) {
+    void registrarAccion({
+      evento: 'despublicar.fail.not-found', actor: despublicadoPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+    });
+    return { ok: false, error: 'Reporte no encontrado' };
+  }
+  if (r.estado !== 'aprobado' && r.estado !== 'publicado') {
+    void registrarAccion({
+      evento: 'despublicar.fail.wrong-state', actor: despublicadoPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+      meta: { estadoActual: r.estado },
+    });
+    return { ok: false, error: `Solo se pueden despublicar reportes aprobados o publicados (estado actual: ${r.estado})` };
+  }
+
+  // 1. Marcar como descartado en DB primero (lo más crítico — el sitio aún tiene el item
+  // pero al menos en nuestro registro queda fuera).
+  await prisma.reporte.update({
+    where: { id },
+    data: { estado: 'descartado', aprobadoPor: despublicadoPor, aprobadoEn: new Date() },
+  });
+
+  // 2. Borrar el item en Framer + re-publish (lo hacemos dinámicamente para evitar
+  // import circular con framer.ts).
+  let framerOk = true;
+  let framerError: string | undefined;
+  if (r.framerItemId) {
+    try {
+      const { borrarItemFramer, publicarSitio } = await import('./framer');
+      const borrado = await borrarItemFramer(r.framerItemId);
+      if (!borrado) {
+        framerOk = false;
+        framerError = 'No se pudo borrar el item en Framer';
+      } else {
+        const publish = await publicarSitio();
+        if (!publish) {
+          framerOk = false;
+          framerError = 'Item borrado pero falló re-publish del sitio';
+        }
+      }
+    } catch (e) {
+      framerOk = false;
+      framerError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  logger.info(`[Aprobación] Reporte #${id} despublicado por ${despublicadoPor} (Framer ok=${framerOk})`);
+  void registrarAccion({
+    evento: framerOk ? 'despublicar.success' : 'despublicar.partial',
+    actor: despublicadoPor, origen, reporteId: id,
+    ip: ctx.ip, userAgent: ctx.userAgent,
+    meta: framerOk ? null : { framerError },
+  });
+
+  if (!framerOk) {
+    return { ok: false, error: `Marcado como descartado en DB pero Framer falló: ${framerError}. Revisar manualmente en Framer.` };
+  }
+  return { ok: true };
 }

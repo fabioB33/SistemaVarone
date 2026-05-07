@@ -153,3 +153,46 @@ export async function notificarReportePendiente(reporte: ReporteNotif): Promise<
     console.error('[Notif] Error armando notificacion de reporte pendiente:', e);
   }
 }
+
+// ─── Notificacion informativa de reporte auto-publicado ─────────────────────
+
+/**
+ * Notifica a Varone por WhatsApp que la IA auto-aprobó y mandó a Framer un
+ * reporte nuevo. A diferencia de notificarReportePendiente, NO incluye links
+ * de aprobar/descartar (la IA ya decidió). Solo informa y deja link al panel
+ * para que pueda DESPUBLICAR si detecta algo mal.
+ *
+ * No falla el flujo si la notificacion no se puede enviar — solo loguea.
+ */
+export async function notificarReporteAutopublicado(reporte: ReporteNotif): Promise<void> {
+  try {
+    const base = ENV.ADMIN_PUBLIC_URL.replace(/\/+$/, '');
+    const linkPanel = `${base}/aprobacion?estado=aprobado`;
+
+    // Resumen: primera oracion de la descripcion (max 200 chars).
+    const resumen = (reporte.descripcion || '')
+      .split(/(?<=[.!?])\s/)[0]
+      ?.slice(0, 200)
+      ?.trim();
+
+    const tipo = reporte.tipoIncidente.toUpperCase();
+    const lineas = [
+      `🤖 *Auto-publicado por IA* #${reporte.id}`,
+      ``,
+      `📍 *${tipo}* — ${reporte.ubicacion}`,
+      reporte.ruta && reporte.ruta !== 'no especificada' && reporte.ruta !== 'desconocida'
+        ? `🛣️ ${reporte.ruta}`
+        : null,
+      reporte.fecha && reporte.fecha !== 'desconocida' ? `📅 ${reporte.fecha}` : null,
+      ``,
+      resumen ? `_${resumen}_` : null,
+      ``,
+      `Si está mal, despublicalo desde el panel:`,
+      `📋 ${linkPanel}`,
+    ].filter(Boolean);
+
+    await notificar(lineas.join('\n'));
+  } catch (e) {
+    console.error('[Notif] Error armando notificacion de reporte auto-publicado:', e);
+  }
+}

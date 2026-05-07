@@ -123,6 +123,21 @@ export async function descartarReporte(
   });
 }
 
+/**
+ * Despublica un reporte ya publicado/aprobado.
+ * Borra el item de Framer, re-publica el sitio, marca como descartado en DB.
+ * Bypass humano para corregir errores de la IA en modo full-auto.
+ */
+export async function despublicarReporte(
+  id: number,
+  despublicadoPor: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return backendFetch('/api/aprobacion/despublicar', {
+    method: 'POST',
+    body: JSON.stringify({ id, despublicadoPor }),
+  });
+}
+
 export async function editarReporteBackend(
   id: number,
   cambios: ReporteEditableFields,
@@ -141,6 +156,52 @@ export async function publicarSitioFramer(): Promise<{
   promovidos?: number;
 }> {
   return backendFetch('/api/framer/publicar', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+// ─── Alertas operativas ─────────────────────────────────────────────────────
+
+export interface AlertaItem {
+  id: number;
+  tipo: 'silencio' | 'spike' | 'pendientes-viejos' | 'distribucion' | 'test';
+  mensaje: string;
+  severidad: 'info' | 'warn' | 'error';
+  meta: Record<string, unknown> | null;
+  estadoEnvio: 'pending' | 'sent' | 'failed' | 'fallback-console';
+  vistaEn: string | null;
+  resueltaEn: string | null;
+  creadoEn: string;
+}
+
+export async function listarAlertas(opts?: {
+  soloSinLeer?: boolean;
+  tipo?: string;
+  limit?: number;
+}): Promise<AlertaItem[]> {
+  const params = new URLSearchParams();
+  if (opts?.soloSinLeer) params.set('soloSinLeer', 'true');
+  if (opts?.tipo) params.set('tipo', opts.tipo);
+  params.set('limit', String(opts?.limit ?? 50));
+  const r = await backendFetch<AlertaItem[]>(`/api/alertas?${params.toString()}`);
+  return r.items || [];
+}
+
+export async function contarAlertasSinLeer(): Promise<number> {
+  const r = await backendFetch<unknown>('/api/alertas/sin-leer/count');
+  return (r as unknown as { count?: number }).count ?? 0;
+}
+
+export async function marcarAlertaVista(id: number): Promise<{ ok: boolean; error?: string }> {
+  return backendFetch('/api/alertas/marcar-vista', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+}
+
+export async function marcarTodasAlertasVistas(): Promise<{ ok: boolean; marcadas?: number; error?: string }> {
+  return backendFetch('/api/alertas/marcar-todas-vistas', {
     method: 'POST',
     body: JSON.stringify({}),
   });

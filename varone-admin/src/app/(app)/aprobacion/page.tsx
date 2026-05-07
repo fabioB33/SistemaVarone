@@ -56,13 +56,14 @@ export default async function AprobacionPage({
         <div>
           <p className="mb-1.5 inline-flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-fg-muted">
             <Activity className="size-3 text-accent" />
-            Centro de moderación
+            Centro de control · IA full-auto
           </p>
           <h1 className="text-3xl font-semibold tracking-tight text-fg">
-            Aprobación de noticias
+            Reportes auto-publicados por IA
           </h1>
           <p className="mt-1.5 text-sm text-fg-muted">
-            Revisá los reportes capturados, aprobá los que vayan al sitio y descartá el resto.
+            La IA Gemini clasifica los mensajes del grupo y manda a Framer los que pasan los criterios.
+            Si algo se publicó mal, despublicalo desde la pestaña correspondiente.
           </p>
         </div>
         <PublicarSitioButton pendientesPublicar={counts.aprobado} />
@@ -72,11 +73,11 @@ export default async function AprobacionPage({
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Kpi
           icon={Inbox}
-          label="Pendientes"
+          label="Reintentando"
           value={counts.pendiente}
           accent={counts.pendiente > 0 ? 'warn' : 'muted'}
         />
-        <Kpi icon={CheckCircle2} label="Aprobados" value={counts.aprobado} accent={counts.aprobado > 0 ? 'info' : 'muted'} />
+        <Kpi icon={CheckCircle2} label="Listos para publicar" value={counts.aprobado} accent={counts.aprobado > 0 ? 'info' : 'muted'} />
         <Kpi icon={Globe} label="Publicados" value={counts.publicado} accent="ok" />
         <Kpi icon={Trash2} label="Descartados" value={counts.descartado} accent="muted" />
       </div>
@@ -91,7 +92,13 @@ export default async function AprobacionPage({
           ) : (
             <div className="space-y-3">
               {items.map((r) => (
-                <ReporteCard key={r.id} reporte={r} showActions={estado === 'pendiente'} />
+                <ReporteCard
+                  key={r.id}
+                  reporte={r}
+                  // showActions=true en pendiente (manuales) y aprobado/publicado (Despublicar).
+                  // En descartado no mostramos acciones — son terminales.
+                  showActions={estado !== 'descartado'}
+                />
               ))}
             </div>
           )}
@@ -154,23 +161,23 @@ function EmptyState({ estado }: { estado: Estado }) {
   const config: Record<Estado, { icon: React.ComponentType<{ className?: string }>; title: string; desc: string }> = {
     pendiente: {
       icon: Inbox,
-      title: 'Bandeja vacía',
-      desc: 'No hay reportes pendientes. Todo al día.',
+      title: 'Sin reintentos pendientes',
+      desc: 'Todos los reportes recientes pasaron la IA y se enviaron a Framer sin errores.',
     },
     aprobado: {
       icon: CheckCircle2,
-      title: 'Sin aprobados en cola',
-      desc: 'Cuando aprobés un reporte, aparecerá acá esperando publicación.',
+      title: 'Sin reportes esperando publicación',
+      desc: 'Cuando la IA apruebe nuevos reportes aparecen acá hasta que el cron publique el sitio (9 AM y 21 hs Argentina).',
     },
     publicado: {
       icon: Globe,
       title: 'Aún no hay publicados',
-      desc: 'Los reportes publicados en el sitio van a listarse acá.',
+      desc: 'Los reportes ya visibles en el sitio público se listan acá. Si alguno está mal, podés despublicarlo.',
     },
     descartado: {
       icon: Trash2,
       title: 'Papelera vacía',
-      desc: 'Los reportes descartados quedan acá como referencia.',
+      desc: 'Reportes descartados por la IA o despublicados manualmente quedan acá como referencia.',
     },
   };
   const { icon: Icon, title, desc } = config[estado];
