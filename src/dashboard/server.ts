@@ -334,6 +334,126 @@ export function startDashboard(port: number = 3000) {
     });
   });
 
+  // ─── Alertas operativas (persistencia + UI) ──────────────────────────────
+
+  // API: listar alertas con filtros opcionales.
+  // Query params: limit, soloSinLeer (true/false), tipo, desde (ISO date)
+  app.get('/api/alertas', async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
+      const soloSinLeer = String(req.query.soloSinLeer || '') === 'true';
+      const tipo = req.query.tipo ? String(req.query.tipo) : undefined;
+      const desdeStr = req.query.desde ? String(req.query.desde) : undefined;
+      const desde = desdeStr ? new Date(desdeStr) : undefined;
+      if (desde && Number.isNaN(desde.getTime())) {
+        res.status(400).json({ ok: false, error: 'desde debe ser ISO date válido' });
+        return;
+      }
+      const validTipos = ['silencio', 'spike', 'pendientes-viejos', 'distribucion', 'test'];
+      if (tipo && !validTipos.includes(tipo)) {
+        res.status(400).json({ ok: false, error: `tipo debe ser uno de: ${validTipos.join(', ')}` });
+        return;
+      }
+      const { listarAlertas } = await import('../services/alertas');
+      const items = await listarAlertas({
+        limit, soloSinLeer, tipo: tipo as 'silencio' | 'spike' | 'pendientes-viejos' | 'distribucion' | 'test' | undefined, desde,
+      });
+      res.json({ ok: true, count: items.length, items });
+    } catch (e) {
+      console.error('[Dashboard] Error listando alertas:', e);
+      res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // API: contador de alertas sin leer. Endpoint liviano para badge del topbar.
+  app.get('/api/alertas/sin-leer/count', async (_req, res) => {
+    try {
+      const { contarAlertasSinLeer } = await import('../services/alertas');
+      const count = await contarAlertasSinLeer();
+      res.json({ ok: true, count });
+    } catch (e) {
+      console.error('[Dashboard] Error contando alertas sin leer:', e);
+      res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // API: marcar una alerta como vista.
+  app.post('/api/alertas/marcar-vista', async (req, res) => {
+    try {
+      const id = parseInt(String(req.body?.id), 10);
+      if (!Number.isFinite(id)) {
+        res.status(400).json({ ok: false, error: 'id inválido' });
+        return;
+      }
+      const { marcarAlertaVista } = await import('../services/alertas');
+      const result = await marcarAlertaVista(id);
+      res.json(result);
+    } catch (e) {
+      console.error('[Dashboard] Error marcando alerta vista:', e);
+      res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // API: marcar todas las alertas sin leer como vistas.
+  app.post('/api/alertas/marcar-todas-vistas', async (_req, res) => {
+    try {
+      const { marcarTodasVistas } = await import('../services/alertas');
+      const count = await marcarTodasVistas();
+      res.json({ ok: true, marcadas: count });
+    } catch (e) {
+      console.error('[Dashboard] Error marcando todas vistas:', e);
+      res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // API: ejecuta los chequeos de comportamiento de la IA on-demand.
+  // El cron horario los corre solo, pero este endpoint sirve para:
+  //  - Testing inmediato sin esperar el próximo tick del cron.
+  //  - Verificar manualmente desde el panel "está todo OK".
+  //  - Disparar alertas de prueba (?test=silencio|spike|pendientes-viejos|distribucion).
+  app.post('/api/health-ai/check', async (req, res) => {
+    try {
+      const test = req.query.test as string | undefined;
+      if (test) {
+        const validKeys = ['silencio', 'spike', 'pendientes-viejos', 'distribucion'];
+        if (!validKeys.includes(test)) {
+          res.status(400).json({ ok: false, error: `test debe ser uno de: ${validKeys.join(', ')}` });
+          return;
+        }
+        const { dispararAlertaTest } = await import('../services/health-ai');
+        await dispararAlertaTest(test as 'silencio' | 'spike' | 'pendientes-viejos' | 'distribucion');
+        res.json({ ok: true, mode: 'test', alerta: test });
+        return;
+      }
+      const { ejecutarChequeosIA } = await import('../services/health-ai');
+      await ejecutarChequeosIA();
+      res.json({ ok: true, mode: 'real', mensaje: 'Chequeos completados (ver logs)' });
+    } catch (e) {
+      console.error('[Dashboard] Error en health-ai check:', e);
+      res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // API: inyección manual de un mensaje simulado al pipeline.
+  // Útil para demo cuando el bridge de whatsapp-web.js está roto por cambios de WA Web,
+  // o para pruebas sin tener que postear en el grupo real.
+  // Solo accesible con BACKEND_API_TOKEN — no expuesto al panel público.
+  app.post('/api/inyectar-mensaje', async (req, res) => {
+    try {
+      const texto = String(req.body?.texto || '').trim();
+      if (texto.length < 15) {
+        res.status(400).json({ ok: false, error: 'texto debe tener al menos 15 caracteres' });
+        return;
+      }
+      const { procesarTexto } = await import('../services/pipeline');
+      procesarTexto(texto, 'whatsapp');
+      res.json({ ok: true, encolado: true, mensaje: 'Mensaje inyectado al pipeline' });
+    } catch (error) {
+      console.error('[Dashboard] Error inyectando mensaje:', error);
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   // API: reintentar Framer manualmente desde el dashboard
   app.post('/api/framer/reintentar', async (_req, res) => {
     try {
@@ -538,6 +658,26 @@ export function startDashboard(port: number = 3000) {
     } catch (error) {
       console.error('[Dashboard] Error descartando reporte:', error);
       res.status(500).json({ ok: false, error: 'Error al descartar' });
+    }
+  });
+
+  // API: despublicar reporte ya publicado/aprobado.
+  // Bypass humano para corregir errores de la IA en el modo full-auto:
+  // borra el item de Framer, re-publica el sitio, marca el reporte como descartado.
+  app.post('/api/aprobacion/despublicar', async (req, res) => {
+    try {
+      const id = parseInt(String(req.body?.id), 10);
+      if (!Number.isFinite(id)) {
+        res.status(400).json({ ok: false, error: 'id inválido' });
+        return;
+      }
+      const despublicadoPor = String(req.body?.despublicadoPor || ENV.DASHBOARD_USER || 'dashboard');
+      const { despublicar } = await import('../services/aprobacion');
+      const result = await despublicar(id, despublicadoPor, ctxFromReq(req));
+      res.json(result);
+    } catch (error) {
+      console.error('[Dashboard] Error despublicando reporte:', error);
+      res.status(500).json({ ok: false, error: 'Error al despublicar' });
     }
   });
 

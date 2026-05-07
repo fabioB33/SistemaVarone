@@ -107,3 +107,45 @@ model AuditLog {
   @@index([evento])
   @@index([ts])
 }
+
+// Alertas operativas del sistema (modo full-auto IA).
+// Cada vez que health-ai detecta una condición anómala, se registra una alerta acá.
+// El panel admin las lee y muestra un badge "N alertas sin leer".
+//
+// Diseñado como "fuente de verdad" de notificaciones — no dependemos del canal de
+// entrega (WhatsApp / Telegram / email): mientras se persistan acá, el operador
+// puede verlas desde el panel.
+//
+// Tipos canónicos:
+//  - 'silencio'         : muchos mensajes en grupo, 0 aprobados (prompt restrictivo / IA degradada)
+//  - 'spike'            : muchos aprobados en poco tiempo (incidente real o falso positivo masivo)
+//  - 'pendientes-viejos': reportes colgados >1h (Framer caído / sin URL)
+//  - 'distribucion'     : un tipo de incidente domina las aprobaciones (sesgo del prompt)
+//  - 'test'             : alertas de prueba disparadas desde el endpoint de testing
+model Alerta {
+  id          Int      @id @default(autoincrement())
+  // Tipo canónico (uno de los listados arriba). Permite filtrar y contar por tipo.
+  tipo        String
+  // Mensaje formateado tal cual se envía al canal de notificación.
+  // Se preserva sin truncar para que el panel muestre el texto completo.
+  mensaje     String
+  // Severidad para que el panel pinte distinto. 'info' / 'warn' / 'error'.
+  severidad   String   @default("warn")
+  // Datos estructurados de las métricas que dispararon la alerta (JSON).
+  // Ej: { "mensajes": 25, "aprobados": 0, "ventanaHoras": 6 }
+  meta        Json?
+  // ¿Se intentó enviar por WhatsApp? Y si sí, ¿llegó OK?
+  // 'pending' (default), 'sent', 'failed', 'fallback-console'
+  estadoEnvio String   @default("pending") @map("estado_envio")
+  // Cuándo Varone marcó la alerta como vista desde el panel. Null = sin leer.
+  vistaEn     DateTime? @map("vista_en")
+  // Cuándo Varone tomó alguna acción manual sobre el problema (opcional).
+  // Hoy no usado por la UI, reservado para iteraciones futuras.
+  resueltaEn  DateTime? @map("resuelta_en")
+  creadoEn    DateTime @default(now()) @map("creado_en")
+
+  @@map("alertas")
+  @@index([vistaEn])      // queries de "alertas no leídas" (vistaEn IS NULL)
+  @@index([tipo])         // filtros por tipo
+  @@index([creadoEn])     // ordenamiento descendente por fecha
+}
