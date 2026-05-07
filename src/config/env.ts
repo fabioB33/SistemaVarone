@@ -19,9 +19,6 @@ export const ENV = {
   // Legacy: webhook directo (se usa solo si FRAMER_PUBLISHER_URL no está disponible)
   FRAMER_ENDPOINT: process.env.FRAMER_ENDPOINT || '',
 
-  // Scraping
-  SCRAPING_INTERVAL_MINUTES: parseInt(process.env.SCRAPING_INTERVAL_MINUTES || '120', 10),
-
   // Dashboard
   DASHBOARD_USER: process.env.DASHBOARD_USER || 'varone',
   DASHBOARD_PASS: process.env.DASHBOARD_PASS || 'varone2026',
