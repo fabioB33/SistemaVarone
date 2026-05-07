@@ -11,9 +11,9 @@ export interface ReporteIncidente {
   patente?: string;
   victimas?: string;
   detenidos?: string;
-  fuente: 'whatsapp' | 'scraping';
+  fuente: 'whatsapp';
   urlNoticia?: string;
-  portalOrigen?: string;
+  portalOrigen?: string;  // medio del que viene la URL si el mensaje WA contenía un link (ej: "infobae.com")
   textoOriginal: string;
 }
 
@@ -24,29 +24,6 @@ export interface MensajeWhatsApp {
   body: string;
   timestamp: number;
   groupName: string;
-}
-
-// Noticia cruda del scraper
-export interface NoticiaCruda {
-  titulo: string;
-  contenido: string;
-  url: string;
-  portal: string;
-  fechaPublicacion?: string;
-}
-
-// Configuración de un portal para scraping
-export interface PortalConfig {
-  nombre: string;
-  url: string;
-  baseUrl?: string;
-  selectores: {
-    listado: string;
-    titulo: string;
-    contenido: string;
-    fecha?: string;
-    link: string;
-  };
 }
 
 // Respuesta de la IA

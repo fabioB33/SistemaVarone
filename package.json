@@ -1,7 +1,7 @@
 {
   "name": "sistema-varone",
   "version": "1.0.0",
-  "description": "Sistema de monitoreo automatizado de seguridad vial con WhatsApp, scraping e IA",
+  "description": "Sistema de monitoreo automatizado de seguridad vial con WhatsApp e IA",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -12,7 +12,7 @@
     "db:studio": "prisma studio",
     "test:ia": "tsx src/test/test-pipeline.ts",
     "test:dedup": "tsx src/test/test-dedup.ts",
-    "test:scraper": "tsx src/test/test-scraper.ts"
+    "seed:demo": "tsx src/test/seed-demo.ts"
   },
   "keywords": [],
   "author": "",
@@ -27,12 +27,11 @@
     "express": "^5.2.1",
     "node-cron": "^4.2.1",
     "openai": "^6.27.0",
-    "playwright": "^1.58.2",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "whatsapp-web.js": "^1.34.6",
+    "whatsapp-web.js": "^1.34.7",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
   },
