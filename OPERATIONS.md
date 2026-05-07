@@ -17,6 +17,66 @@ npm run dev                           # puerto 3000
 cd varone-admin && npm run dev        # puerto 3001
 ```
 
+## Auto-arranque con systemd (modo user)
+
+Los 3 servicios pueden correr como units de systemd-user, así arrancan solos al login (o al boot si está activado lingering) y se reinician solos si caen.
+
+### Setup inicial (una sola vez)
+
+Los unit files ya están en `~/.config/systemd/user/`:
+- `varone-framer-publisher.service` — :4001
+- `varone-backend.service` — :3000 (depende del publisher)
+- `varone-admin.service` — :3001 (depende del backend)
+
+Habilitarlos para que arranquen al login:
+
+```bash
+# Recargar definiciones (cada vez que editás un .service)
+systemctl --user daemon-reload
+
+# Habilitar al login
+systemctl --user enable varone-framer-publisher varone-backend varone-admin
+
+# Arrancar ahora mismo
+systemctl --user start varone-admin   # admin requiere backend, backend requiere publisher → arrancan los 3 en cadena
+```
+
+Para que sigan corriendo aunque cierres sesión / no estés logueado (ej: que arranquen al booteo de la PC):
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+### Operación diaria
+
+```bash
+# Ver estado de los 3
+systemctl --user status varone-framer-publisher varone-backend varone-admin
+
+# Reiniciar uno (ej: tras cambiar .env o código)
+systemctl --user restart varone-backend
+
+# Parar todo
+systemctl --user stop varone-admin varone-backend varone-framer-publisher
+
+# Logs en vivo
+journalctl --user -u varone-backend -f
+
+# Logs persistidos (también van a logs/ del proyecto)
+tail -f logs/varone-backend.log
+```
+
+### Diferencias clave vs. correr a mano
+
+- `Restart=on-failure` con `RestartSec=10`: si el backend crashea, systemd lo levanta solo en 10s.
+- `Requires=` cadena: parar el publisher para automáticamente backend y admin (porque dependen).
+- `ExecStartPre=pkill -f wwebjs_auth/session` en el backend: antes de arrancar, mata cualquier chromium huérfano que haya quedado de un run anterior. Sin esto, el reinicio puede fallar con "browser is already running".
+- `KillMode=mixed` en el backend: cuando systemd termina el servicio, manda SIGTERM al proceso principal y SIGKILL a procesos hijos huérfanos (incluido el chromium).
+
+### Cuando NO querés systemd
+
+Para desarrollo activo donde estás editando código con frecuencia, mejor usá `npm run dev` a mano en 3 terminales — vas a ver los logs en colores y `tsx watch` recarga al instante. systemd es para cuando querés "que esté siempre prendido" sin pensarlo.
+
 ## Notificaciones por WhatsApp
 
 Cada vez que llega un reporte nuevo a la cola de aprobación, Varone recibe un mensaje al número configurado (`VARONE_WA_NUMBER`) con:
