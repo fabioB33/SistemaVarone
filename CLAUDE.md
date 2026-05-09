@@ -1,5 +1,14 @@
 # Sistema Varone — Road Safety Monitor
 
+> [!danger] Reglas universales Pampa Labs OS aplicables aquí (heredadas del CLAUDE.md raíz)
+> Las **11 reglas absolutas** del CLAUDE.md raíz (`/Users/elizabethuribe/Pampa-Labs-Core/CLAUDE.md`) aplican tal cual. Las dos más críticas:
+> - **Regla #9 NO-HARDCODED (formalizada 2026-05-09):** PROHIBIDO hardcodear números WhatsApp, group IDs, prompt template, account IDs, URLs Framer prod, env vars. **HARDCODED es mala palabra.** Schema-driven + env vars siempre.
+> - **Regla #10 VAULT-LOOKUP-BEFORE-INSTRUCT (formalizada 2026-05-09):** ANTES de cada respuesta mencionando paths, services, env vars, group IDs, sprint numbers → ejecutar `grep -rn "<sustantivo>" docs/vault/ products/sistema-varone/CLAUDE.md /Users/elizabethuribe/Pampa-Labs-Core/CLAUDE.md` + pegar bloque visible `[VAULT-CHECK pre-respuesta]`.
+>
+> Ver [[../../docs/vault/lessons-learned/LL-2026-05-09-no-hardcoded-law-pampa-labs]] + [[../../docs/vault/lessons-learned/LL-2026-05-09-vault-lookup-before-instruct]].
+
+---
+
 ## Qué es
 
 Sistema de monitoreo automatizado de seguridad vial que detecta y trackea incidentes de "piratas del asfalto" (robos de carga, asaltos, bloqueos) en rutas argentinas. Opera 24/7 escuchando un grupo de WhatsApp y procesando los mensajes con IA para alimentar un panel de aprobación humana antes de publicar en Framer.
