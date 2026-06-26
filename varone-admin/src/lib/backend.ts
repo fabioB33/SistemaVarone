@@ -31,6 +31,19 @@ export interface ReporteListItem {
   aprobadoPor: string | null;
   aprobadoEn: string | null;
   creadoEn: string;
+
+  // Sprint pivot-framer-form (2026-06-26)
+  provincia: string | null;
+  tipoIncidenteFramer: string | null;
+  fuerzaInterviniente: string | null;
+  tipoVehiculo: string | null;
+  cargaTransportada: string | null;
+  modusOperandi: string | null;
+  huboViolencia: string | null;
+  tipoVehiculoInvolucrado: string | null;
+  cantidadVehiculosInvolucrados: string | null;
+  cantidadPersonasInvolucradas: string | null;
+  camposFaltantes: string[];
 }
 
 interface BackendResponse<T> {
@@ -59,6 +72,18 @@ export type ReporteEditableFields = Partial<{
   detenidos: string | null;
   urlNoticia: string | null;
   ogImageUrl: string | null;
+
+  // Sprint pivot-framer-form (2026-06-26)
+  provincia: string | null;
+  tipoIncidenteFramer: string | null;
+  fuerzaInterviniente: string | null;
+  tipoVehiculo: string | null;
+  cargaTransportada: string | null;
+  modusOperandi: string | null;
+  huboViolencia: string | null;
+  tipoVehiculoInvolucrado: string | null;
+  cantidadVehiculosInvolucrados: string | null;
+  cantidadPersonasInvolucradas: string | null;
 }>;
 
 async function backendFetch<T = unknown>(
@@ -94,13 +119,30 @@ async function backendFetch<T = unknown>(
   return json;
 }
 
+export type EstadoReporte =
+  | 'pendiente'
+  | 'pendiente_revision'
+  | 'aprobado'
+  | 'publicado'
+  | 'descartado'
+  | 'fallo_publicacion';
+
 export async function listarReportes(
-  estado: 'pendiente' | 'aprobado' | 'publicado' | 'descartado',
+  estado: EstadoReporte,
 ): Promise<ReporteListItem[]> {
   const r = await backendFetch<ReporteListItem[]>(
     `/api/aprobacion/lista?estado=${estado}&limit=100`,
   );
   return r.items || [];
+}
+
+/**
+ * Sprint pivot-framer-form: cuenta reportes en pendiente_revision para el
+ * badge del topbar.
+ */
+export async function contarPendientesRevision(): Promise<number> {
+  const r = await backendFetch<unknown>('/api/aprobacion/contar-pendientes-revision');
+  return (r as unknown as { count?: number }).count ?? 0;
 }
 
 export async function aprobarReporte(

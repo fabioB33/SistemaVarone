@@ -41,7 +41,30 @@ export interface ReportePublic {
   aprobadoPor: string | null;
   aprobadoEn: Date | null;
   creadoEn: Date;
+
+  // Sprint pivot-framer-form (2026-06-26) — 10 campos del formulario público
+  // + lista de campos donde la IA no pudo elegir y Varone tiene que completar.
+  provincia: string | null;
+  tipoIncidenteFramer: string | null;
+  fuerzaInterviniente: string | null;
+  tipoVehiculo: string | null;
+  cargaTransportada: string | null;
+  modusOperandi: string | null;
+  huboViolencia: string | null;
+  tipoVehiculoInvolucrado: string | null;
+  cantidadVehiculosInvolucrados: string | null;
+  cantidadPersonasInvolucradas: string | null;
+  camposFaltantes: string[];
 }
+
+/** Estados válidos del Reporte. */
+export type EstadoReporte =
+  | 'pendiente'
+  | 'pendiente_revision'
+  | 'aprobado'
+  | 'publicado'
+  | 'descartado'
+  | 'fallo_publicacion';
 
 export async function listarPendientes(limit = 50): Promise<ReportePublic[]> {
   const rows = await prisma.reporte.findMany({
@@ -53,7 +76,7 @@ export async function listarPendientes(limit = 50): Promise<ReportePublic[]> {
 }
 
 export async function listarPorEstado(
-  estado: 'pendiente' | 'aprobado' | 'publicado' | 'descartado',
+  estado: EstadoReporte,
   limit = 50,
 ): Promise<ReportePublic[]> {
   const rows = await prisma.reporte.findMany({
@@ -62,6 +85,16 @@ export async function listarPorEstado(
     take: limit,
   });
   return rows as unknown as ReportePublic[];
+}
+
+/**
+ * Sprint pivot-framer-form (2026-06-26) — cuenta reportes que requieren
+ * acción humana de Varone para completar dropdowns faltantes.
+ *
+ * Usado por el badge del panel admin para alertar visualmente.
+ */
+export async function contarPendientesRevision(): Promise<number> {
+  return prisma.reporte.count({ where: { estado: 'pendiente_revision' } });
 }
 
 export async function aprobar(
@@ -203,6 +236,19 @@ export interface EditarPendienteInput {
   detenidos?: string | null;
   urlNoticia?: string | null;
   ogImageUrl?: string | null;
+
+  // Sprint pivot-framer-form (2026-06-26) — 10 campos del formulario público
+  // editables desde el panel cuando Varone completa los `camposFaltantes`.
+  provincia?: string | null;
+  tipoIncidenteFramer?: string | null;
+  fuerzaInterviniente?: string | null;
+  tipoVehiculo?: string | null;
+  cargaTransportada?: string | null;
+  modusOperandi?: string | null;
+  huboViolencia?: string | null;
+  tipoVehiculoInvolucrado?: string | null;
+  cantidadVehiculosInvolucrados?: string | null;
+  cantidadPersonasInvolucradas?: string | null;
 }
 
 const EDITABLE_KEYS: readonly (keyof EditarPendienteInput)[] = [
@@ -219,7 +265,18 @@ const EDITABLE_KEYS: readonly (keyof EditarPendienteInput)[] = [
   'detenidos',
   'urlNoticia',
   'ogImageUrl',
-];
+  // Sprint pivot-framer-form (2026-06-26): 10 campos del formulario público.
+  'provincia',
+  'tipoIncidenteFramer',
+  'fuerzaInterviniente',
+  'tipoVehiculo',
+  'cargaTransportada',
+  'modusOperandi',
+  'huboViolencia',
+  'tipoVehiculoInvolucrado',
+  'cantidadVehiculosInvolucrados',
+  'cantidadPersonasInvolucradas',
+] as const;
 
 const STRING_LIMITS: Partial<Record<keyof EditarPendienteInput, number>> = {
   ubicacion: 200,
@@ -235,6 +292,17 @@ const STRING_LIMITS: Partial<Record<keyof EditarPendienteInput, number>> = {
   detenidos: 200,
   urlNoticia: 2048,
   ogImageUrl: 2048,
+  // Sprint pivot-framer-form: dropdowns Framer (strings cortos canonical).
+  provincia: 60,
+  tipoIncidenteFramer: 80,
+  fuerzaInterviniente: 80,
+  tipoVehiculo: 60,
+  cargaTransportada: 60,
+  modusOperandi: 40,
+  huboViolencia: 4,
+  tipoVehiculoInvolucrado: 20,
+  cantidadVehiculosInvolucrados: 10,
+  cantidadPersonasInvolucradas: 10,
 };
 
 function normalize(
@@ -278,9 +346,13 @@ function normalize(
 
 /**
  * Edita un reporte pendiente antes de aprobarlo.
- * Solo se permite cuando estado='pendiente' — una vez aprobado, los datos
- * que viajan a Framer no deberían modificarse desde acá (habría que crear
- * un endpoint de "re-publicar" si hace falta).
+ *
+ * Sprint pivot-framer-form (2026-06-26): se permite también editar reportes
+ * en estado 'pendiente_revision'. Si el editor completa los 10 campos del
+ * formulario público, recalculamos `camposFaltantes` y transicionamos
+ * automáticamente a 'pendiente' (listo para aprobación).
+ *
+ * Estados editables: 'pendiente', 'pendiente_revision'.
  */
 export async function editarPendiente(
   id: number,
@@ -297,13 +369,14 @@ export async function editarPendiente(
     });
     return { ok: false, error: 'Reporte no encontrado' };
   }
-  if (r.estado !== 'pendiente') {
+  const estadosEditables = ['pendiente', 'pendiente_revision'];
+  if (!estadosEditables.includes(r.estado)) {
     void registrarAccion({
       evento: 'editar.fail.wrong-state', actor: editorPor, origen, reporteId: id,
       ip: ctx.ip, userAgent: ctx.userAgent,
       meta: { estadoActual: r.estado },
     });
-    return { ok: false, error: `Solo se pueden editar reportes pendientes (estado actual: ${r.estado})` };
+    return { ok: false, error: `Solo se pueden editar reportes pendiente o pendiente_revision (estado actual: ${r.estado})` };
   }
   const norm = normalize(input);
   if (!norm.ok) {
@@ -327,18 +400,60 @@ export async function editarPendiente(
     };
   }
 
+  // Sprint pivot-framer-form: recalcular camposFaltantes + auto-transición
+  // del estado pendiente_revision → pendiente cuando se completa todo.
+  //
+  // Mergeamos los valores existentes (r.*) con los cambios (norm.data) para
+  // calcular el estado FINAL de los 10 campos Framer.
+  const mergedFramer = {
+    provincia: 'provincia' in norm.data ? norm.data.provincia : r.provincia,
+    tipoIncidenteFramer: 'tipoIncidenteFramer' in norm.data ? norm.data.tipoIncidenteFramer : r.tipoIncidenteFramer,
+    fuerzaInterviniente: 'fuerzaInterviniente' in norm.data ? norm.data.fuerzaInterviniente : r.fuerzaInterviniente,
+    tipoVehiculo: 'tipoVehiculo' in norm.data ? norm.data.tipoVehiculo : r.tipoVehiculo,
+    cargaTransportada: 'cargaTransportada' in norm.data ? norm.data.cargaTransportada : r.cargaTransportada,
+    modusOperandi: 'modusOperandi' in norm.data ? norm.data.modusOperandi : r.modusOperandi,
+    huboViolencia: 'huboViolencia' in norm.data ? norm.data.huboViolencia : r.huboViolencia,
+    tipoVehiculoInvolucrado: 'tipoVehiculoInvolucrado' in norm.data ? norm.data.tipoVehiculoInvolucrado : r.tipoVehiculoInvolucrado,
+    cantidadVehiculosInvolucrados: 'cantidadVehiculosInvolucrados' in norm.data ? norm.data.cantidadVehiculosInvolucrados : r.cantidadVehiculosInvolucrados,
+    cantidadPersonasInvolucradas: 'cantidadPersonasInvolucradas' in norm.data ? norm.data.cantidadPersonasInvolucradas : r.cantidadPersonasInvolucradas,
+  };
+
+  // Aplicar el matcher para validar que los valores nuevos (si los hay) sean
+  // canonical. Si Varone tipeó algo no-canonical desde el panel, se queda
+  // como faltante.
+  const { resolverCamposFramer } = await import('./enum-matcher');
+  const resolved = resolverCamposFramer(mergedFramer);
+  const nuevoEstado =
+    r.estado === 'pendiente_revision' && resolved.camposFaltantes.length === 0
+      ? 'pendiente'
+      : r.estado;
+
+  const dataFinal: Record<string, unknown> = {
+    ...norm.data,
+    camposFaltantes: resolved.camposFaltantes,
+  };
+  if (nuevoEstado !== r.estado) {
+    dataFinal.estado = nuevoEstado;
+  }
+
   const updated = await prisma.reporte.update({
     where: { id },
-    data: norm.data,
+    data: dataFinal,
   });
 
   logger.info(
-    `[Aprobación] Reporte #${id} editado por ${editorPor} (${Object.keys(norm.data).length} campos)`,
+    `[Aprobación] Reporte #${id} editado por ${editorPor} (${Object.keys(norm.data).length} campos, faltantes=${resolved.camposFaltantes.length}, estado=${nuevoEstado})`,
   );
   void registrarAccion({
     evento: 'editar.success', actor: editorPor, origen, reporteId: id,
     ip: ctx.ip, userAgent: ctx.userAgent,
-    meta: { campos: Object.keys(norm.data), cambios },
+    meta: {
+      campos: Object.keys(norm.data),
+      cambios,
+      camposFaltantesPost: resolved.camposFaltantes,
+      estadoPre: r.estado,
+      estadoPost: nuevoEstado,
+    },
   });
   return { ok: true, reporte: updated as unknown as ReportePublic };
 }

@@ -469,11 +469,17 @@ export function startDashboard(port: number = 3000) {
 
   // ─── Flujo de aprobación humana (Framer Server API) ───────────────────────
 
-  // API: listar reportes por estado (default: pendientes)
+  // API: listar reportes por estado (default: pendientes).
+  // Sprint pivot-framer-form (2026-06-26): acepta 'pendiente_revision' + 'fallo_publicacion'.
   app.get('/api/aprobacion/lista', async (req, res) => {
     try {
       const estado = String(req.query.estado || 'pendiente') as
-        | 'pendiente' | 'aprobado' | 'publicado' | 'descartado';
+        | 'pendiente'
+        | 'pendiente_revision'
+        | 'aprobado'
+        | 'publicado'
+        | 'descartado'
+        | 'fallo_publicacion';
       const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
       const { listarPorEstado } = await import('../services/aprobacion');
       const items = await listarPorEstado(estado, limit);
@@ -481,6 +487,18 @@ export function startDashboard(port: number = 3000) {
     } catch (error) {
       console.error('[Dashboard] Error listando reportes por estado:', error);
       res.status(500).json({ ok: false, error: 'Error al listar' });
+    }
+  });
+
+  // Sprint pivot-framer-form: contador para el badge de alerta del panel.
+  app.get('/api/aprobacion/contar-pendientes-revision', async (_req, res) => {
+    try {
+      const { contarPendientesRevision } = await import('../services/aprobacion');
+      const count = await contarPendientesRevision();
+      res.json({ ok: true, count });
+    } catch (error) {
+      console.error('[Dashboard] Error contando pendientes_revision:', error);
+      res.status(500).json({ ok: false, error: 'Error al contar' });
     }
   });
 
