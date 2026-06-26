@@ -1,228 +1,211 @@
 /**
- * Cliente del microservicio framer-publisher.
+ * Sprint pivot-framer-form (2026-06-26) — Cliente del framer-publisher v2.
  *
- * El SDK oficial (framer-api) es ESM-only y vive en /framer-publisher.
- * Acá hablamos por HTTP al microservicio para mantener este módulo en
- * CommonJS y no romper el resto del Sistema Varone.
+ * Llama al microservicio Playwright que postea al formulario público
+ * https://pirateriadecamiones.com.ar/formulario-de-incidentes
+ *
+ * Reemplaza la integración v1 que iba contra Framer Server API + Collection
+ * "Notas". Esa Collection ya no se usa.
  *
  * Endpoints consumidos:
- *  POST {FRAMER_PUBLISHER_URL}/noticia   crea 1 item en draft
- *  POST {FRAMER_PUBLISHER_URL}/publish   publica el sitio (deploy)
+ *  POST {FRAMER_PUBLISHER_URL}/noticia   postea 1 reporte al form
+ *  GET  {FRAMER_PUBLISHER_URL}/health    healthcheck sesión
  */
 
 import logger from './logger';
 import { ENV } from '../config/env';
-import { ReporteIncidente } from '../types';
+import { NOMBRE_AGENTE_REPORTE } from '../config/enums-framer';
 import { marcarFramerEnviado, incrementarIntentosFramer } from './dedup';
+import prisma from './prisma';
 
-// Timeout generoso porque la operación involucra: conexión long-lived al SDK
-// de Framer + getCollections + getItems (para auto-count) + addItems +
-// verificación. La primera operación tras un restart del publisher puede tardar.
-const REQUEST_TIMEOUT_MS = 90_000;
+const REQUEST_TIMEOUT_MS = 180_000; // 3 min — el form fill con Playwright puede tardar
 
 interface PublisherResponse {
   ok?: boolean;
-  itemId?: string;
-  slug?: string;
-  count?: number;
-  imageUrl?: string | null;
   error?: string;
+  urlFinal?: string;
+  mensajeConfirmacion?: string;
+  faltantes?: string[];
 }
 
-interface SendOptions {
-  /** Si true, también dispara publish del sitio luego de crear. Default false. */
-  publishSite?: boolean;
-}
-
-function buildTitle(reporte: ReporteIncidente): string {
-  const tipo = reporte.tipoIncidente?.replace(/_/g, ' ');
-  const ubic = reporte.ubicacion?.trim();
-  const ruta = reporte.ruta?.trim();
-  const partes = [tipo, ubic, ruta].filter(Boolean);
-  return partes.join(' — ').slice(0, 200) || 'Reporte de incidente';
-}
-
-function buildContent(reporte: ReporteIncidente): string {
-  const lines: string[] = [];
-  lines.push(`<p>${escapeHtml(reporte.descripcion)}</p>`);
-  const meta: string[] = [];
-  if (reporte.fecha) meta.push(`<strong>Fecha:</strong> ${escapeHtml(reporte.fecha)}`);
-  if (reporte.hora) meta.push(`<strong>Hora:</strong> ${escapeHtml(reporte.hora)}`);
-  if (reporte.ubicacion) meta.push(`<strong>Ubicación:</strong> ${escapeHtml(reporte.ubicacion)}`);
-  if (reporte.ruta) meta.push(`<strong>Ruta:</strong> ${escapeHtml(reporte.ruta)}`);
-  if (reporte.tipoIncidente) meta.push(`<strong>Tipo:</strong> ${escapeHtml(reporte.tipoIncidente)}`);
-  if (reporte.gravedad) meta.push(`<strong>Gravedad:</strong> ${escapeHtml(reporte.gravedad)}`);
-  if (reporte.vehiculo) meta.push(`<strong>Vehículo:</strong> ${escapeHtml(reporte.vehiculo)}`);
-  if (reporte.patente) meta.push(`<strong>Patente:</strong> ${escapeHtml(reporte.patente)}`);
-  if (reporte.victimas) meta.push(`<strong>Víctimas:</strong> ${escapeHtml(reporte.victimas)}`);
-  if (reporte.detenidos) meta.push(`<strong>Detenidos:</strong> ${escapeHtml(reporte.detenidos)}`);
-  if (meta.length) lines.push(`<p>${meta.join('<br/>')}</p>`);
-  if (reporte.urlNoticia) {
-    lines.push(`<p><a href="${escapeHtml(reporte.urlNoticia)}">Fuente original</a></p>`);
+/**
+ * Postea 1 reporte de la DB al formulario público.
+ *
+ * Si el reporte tiene `camposFaltantes` con entries, NO se publica:
+ * retorna {ok: false, error: 'campos faltantes'} sin contactar al publisher.
+ *
+ * Si todos los campos están completos, lo manda al publisher con Playwright.
+ *
+ * Si el publisher responde {ok: true}, actualiza el reporte en DB:
+ *  estado=publicado + framerEnviado=true + framerItemId=urlFinal.
+ *
+ * Si falla, incrementa framerIntentos y deja el reporte en estado=fallo_publicacion.
+ */
+export async function enviarAFramer(reporteId: number): Promise<{ ok: boolean; error?: string }> {
+  if (!ENV.FRAMER_PUBLISHER_URL) {
+    logger.warn('[Framer] FRAMER_PUBLISHER_URL no configurado.');
+    return { ok: false, error: 'FRAMER_PUBLISHER_URL no configurado' };
   }
-  return lines.join('\n');
-}
 
-function escapeHtml(s: string): string {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+  const reporte = await prisma.reporte.findUnique({ where: { id: reporteId } });
+  if (!reporte) {
+    return { ok: false, error: `Reporte ${reporteId} no encontrado` };
+  }
 
-async function postPublisher<T extends PublisherResponse>(
-  path: string,
-  body: unknown,
-): Promise<T> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  // Pre-validar: si tiene camposFaltantes, no se publica.
+  if (reporte.camposFaltantes && reporte.camposFaltantes.length > 0) {
+    return {
+      ok: false,
+      error: `Reporte ${reporteId} tiene ${reporte.camposFaltantes.length} campos faltantes (${reporte.camposFaltantes.join(', ')}). Varone debe completarlos antes.`,
+    };
+  }
+
+  // Validación de los 13 campos obligatorios + descripción del hecho.
+  const camposNulos: string[] = [];
+  const required = [
+    'provincia',
+    'tipoIncidenteFramer',
+    'fuerzaInterviniente',
+    'tipoVehiculo',
+    'cargaTransportada',
+    'modusOperandi',
+    'huboViolencia',
+    'tipoVehiculoInvolucrado',
+    'cantidadVehiculosInvolucrados',
+    'cantidadPersonasInvolucradas',
+  ] as const;
+  for (const k of required) {
+    if (!reporte[k]) camposNulos.push(k);
+  }
+  if (camposNulos.length > 0) {
+    return {
+      ok: false,
+      error: `Campos null en DB: ${camposNulos.join(', ')}`,
+    };
+  }
+
+  const body = {
+    nombreYApellido: NOMBRE_AGENTE_REPORTE,
+    fechaIncidente: reporte.fecha,
+    horaIncidente: reporte.hora && reporte.hora !== 'desconocida' ? reporte.hora : null,
+    provincia: reporte.provincia!,
+    direccionLocalidad: reporte.ubicacion,
+    tipoIncidenteFramer: reporte.tipoIncidenteFramer!,
+    fuerzaInterviniente: reporte.fuerzaInterviniente!,
+    tipoVehiculo: reporte.tipoVehiculo!,
+    cargaTransportada: reporte.cargaTransportada!,
+    modusOperandi: reporte.modusOperandi!,
+    huboViolencia: reporte.huboViolencia!,
+    tipoVehiculoInvolucrado: reporte.tipoVehiculoInvolucrado!,
+    cantidadVehiculosInvolucrados: reporte.cantidadVehiculosInvolucrados!,
+    cantidadPersonasInvolucradas: reporte.cantidadPersonasInvolucradas!,
+    descripcionDelHecho: reporte.descripcion,
+  };
+
   try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (ENV.FRAMER_PUBLISHER_TOKEN) {
       headers['X-Publisher-Token'] = ENV.FRAMER_PUBLISHER_TOKEN;
     }
-    const res = await fetch(`${ENV.FRAMER_PUBLISHER_URL}${path}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-    const json = (await res.json().catch(() => ({}))) as T;
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${json.error || res.statusText}`);
-    }
-    return json;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
-/**
- * Envía un reporte al microservicio framer-publisher para crear un item
- * en la Collection "Notas". Por default no publica el sitio (queda en draft).
- *
- * Devuelve el itemId de Framer si tuvo éxito, o null si falló.
- */
-export async function enviarAFramer(
-  reporte: ReporteIncidente,
-  reporteId?: number,
-  options: SendOptions = {},
-): Promise<{ itemId: string; slug: string } | null> {
-  if (!ENV.FRAMER_PUBLISHER_URL) {
-    logger.warn('[Framer] FRAMER_PUBLISHER_URL no configurado, saltando envío.');
-    return null;
-  }
-
-  const title = buildTitle(reporte);
-  const content = buildContent(reporte);
-  const link = reporte.urlNoticia || '';
-
-  if (!link) {
-    logger.warn('[Framer] Reporte sin urlNoticia — Framer requiere link, saltando envío.');
-    return null;
-  }
-
-  try {
-    const resp = await postPublisher('/noticia', {
-      title,
-      link,
-      date: reporte.fecha || new Date().toISOString().slice(0, 10),
-      content,
-      metaDescription: reporte.descripcion?.slice(0, 160) || title,
-      autoOgImage: true,
-      featured: false,
-    });
-
-    if (!resp.ok || !resp.itemId || !resp.slug) {
-      logger.error(`[Framer] Publisher devolvió respuesta inválida: ${JSON.stringify(resp)}`);
-      if (reporteId) await incrementarIntentosFramer(reporteId);
-      return null;
-    }
-
-    logger.info(
-      `[Framer] Item creado: id=${resp.itemId} slug=${resp.slug} count=${resp.count}` +
-        (resp.imageUrl ? ' (con imagen OG)' : ''),
-    );
-
-    if (options.publishSite) {
-      try {
-        await postPublisher('/publish', {});
-        logger.info('[Framer] Sitio re-publicado tras la inserción.');
-      } catch (err) {
-        logger.error('[Framer] Falló publish del sitio (item ya creado):', err);
-      }
-    }
-
-    if (reporteId) await marcarFramerEnviado(reporteId);
-    return { itemId: resp.itemId, slug: resp.slug };
-  } catch (error) {
-    logger.error('[Framer] Error llamando al publisher:', error);
-    if (reporteId) await incrementarIntentosFramer(reporteId);
-    return null;
-  }
-}
-
-/**
- * Borra un item de la collection "Notas" en Framer.
- * Usado por el flujo de despublicar (botón del panel cuando Varone detecta
- * que la IA auto-publicó algo mal).
- *
- * El borrado en Framer NO publica el sitio automáticamente — el caller
- * debe llamar a publicarSitio() después para que el cambio sea visible
- * en producción.
- */
-export async function borrarItemFramer(itemId: string): Promise<boolean> {
-  if (!ENV.FRAMER_PUBLISHER_URL) {
-    logger.warn('[Framer] FRAMER_PUBLISHER_URL no configurado, no se puede borrar.');
-    return false;
-  }
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    let resp: PublisherResponse;
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (ENV.FRAMER_PUBLISHER_TOKEN) {
-        headers['X-Publisher-Token'] = ENV.FRAMER_PUBLISHER_TOKEN;
-      }
-      const res = await fetch(
-        `${ENV.FRAMER_PUBLISHER_URL}/noticia/${encodeURIComponent(itemId)}`,
-        { method: 'DELETE', headers, signal: ctrl.signal },
-      );
-      const json = (await res.json().catch(() => ({}))) as PublisherResponse;
+      const res = await fetch(`${ENV.FRAMER_PUBLISHER_URL}/noticia`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      resp = (await res.json().catch(() => ({}))) as PublisherResponse;
       if (!res.ok) {
-        logger.error(`[Framer] DELETE item ${itemId} falló: HTTP ${res.status}: ${json.error || res.statusText}`);
-        return false;
+        await incrementarIntentosFramer(reporteId);
+        return { ok: false, error: `HTTP ${res.status}: ${resp.error || 'unknown'}` };
       }
-      logger.info(`[Framer] Item ${itemId} borrado de la collection.`);
-      return true;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (resp.ok) {
+      await marcarFramerEnviado(reporteId);
+      await prisma.reporte.update({
+        where: { id: reporteId },
+        data: {
+          estado: 'publicado',
+          framerItemId: resp.urlFinal || null,
+        },
+      });
+      logger.info(`[Framer] Reporte ${reporteId} publicado en form. URL=${resp.urlFinal}`);
+      return { ok: true };
+    } else {
+      await incrementarIntentosFramer(reporteId);
+      await prisma.reporte.update({
+        where: { id: reporteId },
+        data: { estado: 'fallo_publicacion' },
+      });
+      logger.error(`[Framer] Publisher devolvió error: ${resp.error}`);
+      return { ok: false, error: resp.error || 'sin mensaje' };
+    }
+  } catch (error) {
+    await incrementarIntentosFramer(reporteId);
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[Framer] Error llamando al publisher: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * Healthcheck del publisher: ¿está vivo + sesión válida?
+ */
+export async function healthcheckPublisher(): Promise<{ alive: boolean; logged: boolean; error?: string }> {
+  if (!ENV.FRAMER_PUBLISHER_URL) {
+    return { alive: false, logged: false, error: 'FRAMER_PUBLISHER_URL no configurado' };
+  }
+  try {
+    const headers: Record<string, string> = {};
+    if (ENV.FRAMER_PUBLISHER_TOKEN) {
+      headers['X-Publisher-Token'] = ENV.FRAMER_PUBLISHER_TOKEN;
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60_000);
+    try {
+      const res = await fetch(`${ENV.FRAMER_PUBLISHER_URL}/health`, { headers, signal: ctrl.signal });
+      const j = await res.json().catch(() => ({}));
+      return j as { alive: boolean; logged: boolean; error?: string };
     } finally {
       clearTimeout(timer);
     }
   } catch (error) {
-    logger.error(`[Framer] Error borrando item ${itemId}:`, error);
-    return false;
+    return {
+      alive: false,
+      logged: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
 /**
- * Dispara un publish del sitio sin crear nada nuevo.
- * Útil para el cron diario y el botón "Publicar ahora" del dashboard.
+ * Compat v1: `borrarItemFramer` ya no aplica porque el form público no expone
+ * delete. Mantengo el export para no romper imports, pero retorna false.
+ *
+ * Si Varone quiere despublicar, lo único viable es:
+ *  - Marcar el reporte en estado='descartado' en nuestra DB.
+ *  - Contactar a admin del sitio para borrar el item del form si es necesario.
+ */
+export async function borrarItemFramer(_itemId: string): Promise<boolean> {
+  logger.warn(
+    '[Framer] borrarItemFramer ya no aplica en v2 (form público sin delete). Marcar estado=descartado en nuestra DB.',
+  );
+  return false;
+}
+
+/**
+ * Compat v1: `publicarSitio` no aplica — el sitio público se rebuilds solo
+ * al recibir el form. Mantengo el export por compat.
  */
 export async function publicarSitio(): Promise<{ deploymentId: string } | null> {
-  try {
-    const resp = (await postPublisher('/publish', {})) as PublisherResponse & {
-      deploymentId?: string;
-    };
-    if (!resp.ok || !resp.deploymentId) {
-      logger.error(`[Framer] Publish devolvió respuesta inválida: ${JSON.stringify(resp)}`);
-      return null;
-    }
-    logger.info(`[Framer] Sitio publicado: deploymentId=${resp.deploymentId}`);
-    return { deploymentId: resp.deploymentId };
-  } catch (error) {
-    logger.error('[Framer] Error en publicarSitio:', error);
-    return null;
-  }
+  logger.warn('[Framer] publicarSitio ya no aplica en v2 (form público auto-rebuilds).');
+  return null;
 }

@@ -1,6 +1,7 @@
 import logger from './logger';
 import crypto from 'crypto';
 import prisma from './prisma';
+import { resolverCamposFramer } from './enum-matcher';
 
 function generarHash(texto: string): string {
   const normalizado = texto.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -25,6 +26,27 @@ export async function existeDuplicado(texto: string, urlNoticia?: string): Promi
 export async function registrarReporte(texto: string, datos: Record<string, unknown>): Promise<number> {
   const hash = generarHash(texto);
 
+  // Sprint pivot-framer-form (2026-06-26):
+  // Aplica fuzzy match a los 10 campos del formulario Framer. Si el matcher
+  // no resuelve alguno, queda null y se agrega a `camposFaltantes`. Si la
+  // lista tiene >0 entries, el reporte arranca en `pendiente_revision` y
+  // Varone tiene que completarlo manualmente desde el dashboard antes de
+  // que se publique en pirateriadecamiones.com.ar/formulario-de-incidentes.
+  const framer = resolverCamposFramer({
+    provincia: datos.provincia as string | null | undefined,
+    tipoIncidenteFramer: datos.tipoIncidenteFramer as string | null | undefined,
+    fuerzaInterviniente: datos.fuerzaInterviniente as string | null | undefined,
+    tipoVehiculo: datos.tipoVehiculo as string | null | undefined,
+    cargaTransportada: datos.cargaTransportada as string | null | undefined,
+    modusOperandi: datos.modusOperandi as string | null | undefined,
+    huboViolencia: datos.huboViolencia as string | null | undefined,
+    tipoVehiculoInvolucrado: datos.tipoVehiculoInvolucrado as string | null | undefined,
+    cantidadVehiculosInvolucrados: datos.cantidadVehiculosInvolucrados as string | null | undefined,
+    cantidadPersonasInvolucradas: datos.cantidadPersonasInvolucradas as string | null | undefined,
+  });
+
+  const estado = framer.camposFaltantes.length > 0 ? 'pendiente_revision' : 'pendiente';
+
   const reporte = await prisma.reporte.create({
     data: {
       hash,
@@ -45,10 +67,26 @@ export async function registrarReporte(texto: string, datos: Record<string, unkn
       framerEnviado: false,
       framerIntentos: 0,
       portalOrigen: (datos.portalOrigen as string) || null,
+
+      // Campos del form Framer
+      provincia: framer.provincia,
+      tipoIncidenteFramer: framer.tipoIncidenteFramer,
+      fuerzaInterviniente: framer.fuerzaInterviniente,
+      tipoVehiculo: framer.tipoVehiculo,
+      cargaTransportada: framer.cargaTransportada,
+      modusOperandi: framer.modusOperandi,
+      huboViolencia: framer.huboViolencia,
+      tipoVehiculoInvolucrado: framer.tipoVehiculoInvolucrado,
+      cantidadVehiculosInvolucrados: framer.cantidadVehiculosInvolucrados,
+      cantidadPersonasInvolucradas: framer.cantidadPersonasInvolucradas,
+      camposFaltantes: framer.camposFaltantes,
+      estado,
     },
   });
 
-  logger.info(`[Dedup] Reporte registrado (hash: ${hash.substring(0, 12)}...)`);
+  logger.info(
+    `[Dedup] Reporte registrado (id=${reporte.id} estado=${estado} faltantes=${framer.camposFaltantes.length})`,
+  );
   return reporte.id;
 }
 

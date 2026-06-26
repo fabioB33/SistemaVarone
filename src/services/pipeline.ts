@@ -1,12 +1,11 @@
 import { analizarConIA } from './ia';
 import { existeDuplicado, registrarReporte, obtenerPendientesFramer } from './dedup';
 import { enviarAFramer } from './framer';
-import { aprobarPorIA } from './aprobacion';
 import { incrementarMetrica, emitirEstadoProcesado } from '../dashboard/server';
 import { ReporteIncidente } from '../types';
 import { ENV } from '../config/env';
 import logger from './logger';
-import { notificarReporteAutopublicado } from './notificaciones';
+import prisma from './prisma';
 
 // F2: detectar spike — si entran N reportes relevantes en una ventana de tiempo, alertar
 const SPIKE_VENTANA_MS = 10 * 60 * 1000;  // 10 minutos
@@ -249,37 +248,33 @@ async function _procesarTexto(
     incrementarMetrica('reportesRegistrados');
     await verificarSpike();
 
-    // ── Auto-publicación por IA ──────────────────────────────────────────
-    // Modo full-auto: la IA marcó el reporte como relevante → lo enviamos
-    // directo a Framer como item draft. Si el envío tiene éxito, lo
-    // marcamos 'aprobado' con actor='ai-auto'. El cron de publish (9 AM
-    // y 21:00 hs Argentina) se encarga después de hacerlo público en el sitio.
+    // Sprint pivot-framer-form (2026-06-26) — ya NO se auto-publica.
     //
-    // Si el envío a Framer falla, el reporte queda en 'pendiente' y el cron
-    // reintentarFramerPendientes() lo levanta cada 15 min con backoff exponencial.
-    logger.info(`[Pipeline] Reporte #${reporteId} aceptado por IA: ${reporte.tipoIncidente} en ${reporte.ubicacion}. Enviando a Framer (auto)...`);
+    // El sistema queda en modo "review-first":
+    //  - Si la IA extrajo todos los campos del formulario público OK
+    //    → estado='pendiente' (Varone aprueba con 1 click y se publica).
+    //  - Si falta ≥1 dropdown → estado='pendiente_revision' (Varone tiene
+    //    que completar los faltantes manualmente antes de publicar).
+    //
+    // El `registrarReporte()` ya setea el estado correcto basado en
+    // `camposFaltantes`. Nada más que hacer acá.
+    //
+    // Notificamos a Varone con el link al panel para que revise.
+    const reporteDb = await prisma.reporte.findUnique({ where: { id: reporteId } });
+    const necesitaRevision = (reporteDb?.camposFaltantes?.length ?? 0) > 0;
 
-    const framerResult = await enviarAFramer(reporte, reporteId, { publishSite: false });
-
-    if (framerResult) {
-      await aprobarPorIA(reporteId, framerResult.itemId, framerResult.slug);
-      logger.info(`[Pipeline] Reporte #${reporteId} auto-aprobado por IA → Framer item ${framerResult.itemId}`);
-
-      // Notificación informativa a Varone (sin links de aprobar/descartar — la IA ya decidió)
-      void notificarReporteAutopublicado({
-        id: reporteId,
-        tipoIncidente: reporte.tipoIncidente,
-        ubicacion: reporte.ubicacion,
-        ruta: reporte.ruta,
-        fecha: reporte.fecha,
-        descripcion: reporte.descripcion,
-      }).catch(e => logger.error('[Pipeline] Error notificando auto-publicación:', e));
+    if (necesitaRevision) {
+      logger.warn(
+        `[Pipeline] Reporte #${reporteId} en pendiente_revision — IA no resolvió ${reporteDb!.camposFaltantes.length} dropdowns: ${reporteDb!.camposFaltantes.join(', ')}`,
+      );
     } else {
-      logger.warn(`[Pipeline] Reporte #${reporteId} queda en 'pendiente' — Framer falló, se reintenta en 15min.`);
+      logger.info(
+        `[Pipeline] Reporte #${reporteId} en pendiente — todos los campos OK, esperando aprobación de Varone.`,
+      );
     }
 
     if (waMsgId) emitirEstadoProcesado(waMsgId, true, { gravedad: reporte.gravedad, ubicacion: reporte.ubicacion });
-    console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente})`);
+    console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente}, estado=${necesitaRevision ? 'pendiente_revision' : 'pendiente'})`);
   } catch (error) {
     console.error(`[Pipeline] Error procesando texto (${fuente}):`, error);
   }
@@ -318,28 +313,18 @@ export async function reintentarFramerPendientes(): Promise<void> {
     console.log(`[Pipeline] Reintentando ${listos.length}/${pendientes.length} reportes pendientes de Framer...`);
 
     for (const r of listos) {
-      const reporte: Partial<ReporteIncidente> = {
-        fecha: r.fecha,
-        hora: r.hora ?? 'desconocida',
-        ubicacion: r.ubicacion,
-        ruta: r.ruta,
-        tipoIncidente: r.tipoIncidente,
-        gravedad: r.gravedad ?? undefined,
-        descripcion: r.descripcion,
-        vehiculo: r.vehiculo ?? undefined,
-        patente: r.patente ?? undefined,
-        fuente: r.fuente as 'whatsapp',
-        urlNoticia: r.urlNoticia ?? undefined,
-        victimas: r.victimas ?? undefined,
-        detenidos: r.detenidos ?? undefined,
-      };
-      const result = await enviarAFramer(reporte as ReporteIncidente, r.id);
-      // Si el reporte estaba en 'pendiente' (auto-flow falló en primer envío)
-      // y el retry tuvo éxito, transicionamos a 'aprobado' por IA — mismo
-      // tratamiento que cuando el primer intento sale bien en _procesarTexto().
-      if (result && r.estado === 'pendiente') {
-        await aprobarPorIA(r.id, result.itemId, result.slug);
-        logger.info(`[Pipeline] Retry exitoso: reporte #${r.id} transicionado a 'aprobado' por IA.`);
+      // Sprint pivot-framer-form (2026-06-26): firma nueva — solo reporteId.
+      // El publisher lee los campos directo de DB.
+      // Solo retry reportes ya aprobados (Varone OK) que están en
+      // 'fallo_publicacion'. NO reintenta pendientes — eso requiere acción humana.
+      if (r.estado !== 'aprobado' && r.estado !== 'fallo_publicacion') {
+        continue;
+      }
+      const result = await enviarAFramer(r.id);
+      if (result.ok) {
+        logger.info(`[Pipeline] Retry exitoso: reporte #${r.id} publicado en form Framer.`);
+      } else {
+        logger.warn(`[Pipeline] Retry falló reporte #${r.id}: ${result.error}`);
       }
     }
   } finally {

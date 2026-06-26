@@ -13,8 +13,23 @@ export interface ReporteIncidente {
   detenidos?: string;
   fuente: 'whatsapp';
   urlNoticia?: string;
-  portalOrigen?: string;  // medio del que viene la URL si el mensaje WA contenía un link (ej: "infobae.com")
+  portalOrigen?: string;
   textoOriginal: string;
+
+  // Sprint pivot-framer-form (2026-06-26) — campos del formulario público.
+  // La IA devuelve cada uno con un valor de los enums canonical o null si
+  // no logra decidir (señal de ambigüedad). Validación fuzzy contra enums
+  // en `enum-matcher.ts`.
+  provincia?: string | null;
+  tipoIncidenteFramer?: string | null;
+  fuerzaInterviniente?: string | null;
+  tipoVehiculo?: string | null;
+  cargaTransportada?: string | null;
+  modusOperandi?: string | null;
+  huboViolencia?: string | null;
+  tipoVehiculoInvolucrado?: string | null;
+  cantidadVehiculosInvolucrados?: string | null;
+  cantidadPersonasInvolucradas?: string | null;
 }
 
 // Mensaje crudo de WhatsApp

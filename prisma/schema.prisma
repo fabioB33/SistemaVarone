@@ -29,13 +29,38 @@ model Reporte {
   portalOrigen   String?  @map("portal_origen")  // nombre del portal si fuente=scraping
   creadoEn       DateTime @default(now()) @map("creado_en")
 
-  // Flujo de aprobación + integración Framer Server API
-  estado         String   @default("pendiente") // 'pendiente' | 'aprobado' | 'descartado' | 'publicado'
+  // Sprint pivot-framer-form (2026-06-26) — Campos del formulario público
+  // pirateriadecamiones.com.ar/formulario-de-incidentes. Mapeo 1:1 a dropdowns.
+  // Si la IA no logra elegir alguno, queda null y va a `camposFaltantes`.
+  provincia                     String? @map("provincia")
+  tipoIncidenteFramer           String? @map("tipo_incidente_framer")
+  fuerzaInterviniente           String? @map("fuerza_interviniente")
+  tipoVehiculo                  String? @map("tipo_vehiculo")
+  cargaTransportada             String? @map("carga_transportada")
+  modusOperandi                 String? @map("modus_operandi")
+  huboViolencia                 String? @map("hubo_violencia")
+  tipoVehiculoInvolucrado       String? @map("tipo_vehiculo_involucrado")
+  cantidadVehiculosInvolucrados String? @map("cantidad_vehiculos_involucrados")
+  cantidadPersonasInvolucradas  String? @map("cantidad_personas_involucradas")
+
+  // Lista de campos donde la IA marcó ambigüedad. Si tiene >0 entries,
+  // estado=pendiente_revision y aparece alerta en dashboard principal.
+  camposFaltantes String[] @map("campos_faltantes") @default([])
+
+  // Flujo de aprobación + integración Framer (vía Playwright form-fill).
+  // Estados:
+  //  'pendiente'           → IA logró extraer todos los campos. Espera aprobación humana.
+  //  'pendiente_revision'  → IA NO pudo elegir ≥1 dropdown. Varone completa antes.
+  //  'aprobado'            → Varone OK, listo para publicar.
+  //  'publicado'           → ya posteado al formulario público.
+  //  'descartado'          → Varone NO quiso publicar.
+  //  'fallo_publicacion'   → Playwright tiró error al postear. Se reintenta.
+  estado         String   @default("pendiente")
   aprobadoPor    String?  @map("aprobado_por")
   aprobadoEn     DateTime? @map("aprobado_en")
-  framerItemId   String?  @map("framer_item_id")    // id del item creado en la Collection Notas
+  framerItemId   String?  @map("framer_item_id")
   framerSlug     String?  @map("framer_slug")
-  ogImageUrl     String?  @map("og_image_url")      // URL de Open Graph extraída del urlNoticia
+  ogImageUrl     String?  @map("og_image_url")
 
   @@map("reportes")
   @@index([estado])

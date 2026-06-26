@@ -68,7 +68,7 @@ export async function aprobar(
   id: number,
   aprobadoPor: string,
   ctx: ActorContext = {},
-): Promise<{ ok: true; framerItemId: string; framerSlug: string } | { ok: false; error: string }> {
+): Promise<{ ok: boolean; error?: string }> {
   const origen = ctx.origen ?? 'panel';
   const r = await prisma.reporte.findUnique({ where: { id } });
   if (!r) {
@@ -105,44 +105,50 @@ export async function aprobar(
     textoOriginal: r.textoOriginal,
   };
 
-  // No publicamos el sitio acá: queda en draft hasta el cron diario.
-  const result = await enviarAFramer(reporte, id, { publishSite: false });
-
-  if (!result) {
-    // Marcamos como aprobado igual; el cron de reintentos se encargará
-    await prisma.reporte.update({
-      where: { id },
-      data: {
-        estado: 'aprobado',
-        aprobadoPor,
-        aprobadoEn: new Date(),
-      },
-    });
-    void registrarAccion({
-      evento: 'aprobar.partial.framer-pending', actor: aprobadoPor, origen, reporteId: id,
-      ip: ctx.ip, userAgent: ctx.userAgent,
-    });
-    return { ok: false, error: 'Aprobado pero falló el envío a Framer (se reintentará automáticamente)' };
-  }
-
+  // Sprint pivot-framer-form (2026-06-26): la firma de enviarAFramer cambió.
+  // Ahora solo necesita el reporteId (lee todo de la DB) y retorna {ok, error}.
+  // Si el reporte tiene camposFaltantes, retorna error sin publicar.
+  // Primero marcamos como aprobado (registro del acto de Varone) y después
+  // intentamos publicar. Si el publish falla, queda en estado intermedio que
+  // el cron retry procesa.
   await prisma.reporte.update({
     where: { id },
     data: {
       estado: 'aprobado',
       aprobadoPor,
       aprobadoEn: new Date(),
-      framerItemId: result.itemId,
-      framerSlug: result.slug,
     },
   });
 
-  logger.info(`[Aprobación] Reporte #${id} aprobado por ${aprobadoPor} → Framer item ${result.itemId}`);
+  const result = await enviarAFramer(id);
+
+  if (!result.ok) {
+    void registrarAccion({
+      evento: 'aprobar.partial.framer-pending',
+      actor: aprobadoPor,
+      origen,
+      reporteId: id,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      meta: { error: result.error },
+    });
+    return {
+      ok: false,
+      error: `Aprobado pero falló publicación en form Framer: ${result.error}. Cron retry lo procesará.`,
+    };
+  }
+
+  // enviarAFramer ya actualizó estado a 'publicado' + framerItemId.
+  logger.info(`[Aprobación] Reporte #${id} aprobado por ${aprobadoPor} y publicado en form.`);
   void registrarAccion({
-    evento: 'aprobar.success', actor: aprobadoPor, origen, reporteId: id,
-    ip: ctx.ip, userAgent: ctx.userAgent,
-    meta: { framerItemId: result.itemId, framerSlug: result.slug },
+    evento: 'aprobar.success',
+    actor: aprobadoPor,
+    origen,
+    reporteId: id,
+    ip: ctx.ip,
+    userAgent: ctx.userAgent,
   });
-  return { ok: true, framerItemId: result.itemId, framerSlug: result.slug };
+  return { ok: true };
 }
 
 export async function descartar(
@@ -430,40 +436,22 @@ export async function despublicar(
     data: { estado: 'descartado', aprobadoPor: despublicadoPor, aprobadoEn: new Date() },
   });
 
-  // 2. Borrar el item en Framer + re-publish (lo hacemos dinámicamente para evitar
-  // import circular con framer.ts).
-  let framerOk = true;
-  let framerError: string | undefined;
-  if (r.framerItemId) {
-    try {
-      const { borrarItemFramer, publicarSitio } = await import('./framer');
-      const borrado = await borrarItemFramer(r.framerItemId);
-      if (!borrado) {
-        framerOk = false;
-        framerError = 'No se pudo borrar el item en Framer';
-      } else {
-        const publish = await publicarSitio();
-        if (!publish) {
-          framerOk = false;
-          framerError = 'Item borrado pero falló re-publish del sitio';
-        }
-      }
-    } catch (e) {
-      framerOk = false;
-      framerError = e instanceof Error ? e.message : String(e);
-    }
-  }
-
-  logger.info(`[Aprobación] Reporte #${id} despublicado por ${despublicadoPor} (Framer ok=${framerOk})`);
+  // 2. Sprint pivot-framer-form: el form público no expone delete.
+  // Si Varone quiere que el reporte deje de aparecer en el sitio, debe
+  // contactar al admin del sitio. Acá solo lo marcamos descartado en DB.
+  logger.warn(
+    `[Aprobación] Reporte #${id} descartado por ${despublicadoPor}. ` +
+    `Sprint pivot-framer-form: NO se puede despublicar del sitio automáticamente. ` +
+    `Contactar admin de pirateriadecamiones.com.ar si quedó publicado allá.`,
+  );
   void registrarAccion({
-    evento: framerOk ? 'despublicar.success' : 'despublicar.partial',
-    actor: despublicadoPor, origen, reporteId: id,
-    ip: ctx.ip, userAgent: ctx.userAgent,
-    meta: framerOk ? null : { framerError },
+    evento: 'despublicar.success',
+    actor: despublicadoPor,
+    origen,
+    reporteId: id,
+    ip: ctx.ip,
+    userAgent: ctx.userAgent,
+    meta: r.framerItemId ? { warningSitioSinDelete: true, urlFinal: r.framerItemId } : null,
   });
-
-  if (!framerOk) {
-    return { ok: false, error: `Marcado como descartado en DB pero Framer falló: ${framerError}. Revisar manualmente en Framer.` };
-  }
   return { ok: true };
 }

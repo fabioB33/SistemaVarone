@@ -1,7 +1,7 @@
 {
   "name": "framer-publisher",
-  "version": "1.0.0",
-  "description": "Microservicio ESM aislado para publicar noticias del Sistema Varone en Framer CMS via Server API.",
+  "version": "2.0.0",
+  "description": "Sprint pivot-framer-form: microservicio Playwright que postea reportes al formulario público de pirateriadecamiones.com.ar (reemplaza la integración Framer Server API del v1).",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "express": "^5.2.1",
-    "framer-api": "^0.1.7"
+    "playwright": "^1.58.2"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

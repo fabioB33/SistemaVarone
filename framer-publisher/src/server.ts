@@ -1,181 +1,136 @@
 /**
- * framer-publisher — microservicio Express en :4001.
+ * Sprint pivot-framer-form (2026-06-26) — Server framer-publisher v2.
  *
- * Aislado en ESM porque framer-api es ESM-only y el resto del Sistema Varone
- * vive en CommonJS. El servicio principal (Sistema Varone) llama a estos
- * endpoints por HTTP en localhost.
+ * Reemplaza el endpoint v1 que hablaba con Framer Server API.
+ * Ahora postea al formulario público con Playwright.
  *
  * Endpoints:
- *  GET  /health                    healthcheck
- *  GET  /noticias                  lista items actuales en "Notas"
- *  POST /noticia                   crea 1 item en draft (no publica el sitio)
- *  POST /publish                   publica el sitio (publish + deploy)
- *  POST /og-image                  extrae og:image de una URL (utility)
+ *  POST /noticia            postea 1 reporte al formulario
+ *  GET  /health             healthcheck del browser + sesión
  *
- * Auth: header X-Publisher-Token coincide con FRAMER_PUBLISHER_TOKEN.
- *       Si la var no está seteada, no se valida (modo dev).
+ * Auth: header X-Publisher-Token debe matchear FRAMER_PUBLISHER_TOKEN.
  */
 
-import express, { type Request, type Response, type NextFunction } from 'express';
-import {
-  publishNoticia,
-  publishSite,
-  listNoticias,
-  removeNoticia,
-  disconnectFramer,
-  type PublishInput,
-} from './framer.js';
-import { extractOgImage } from './og-image.js';
-import { buildSlug } from './slug.js';
-
-const PORT = parseInt(process.env.FRAMER_PUBLISHER_PORT || '4001', 10);
-const TOKEN = process.env.FRAMER_PUBLISHER_TOKEN || '';
+import express, { Request, Response, NextFunction } from 'express';
+import { postearReporte, healthcheck, disconnectBrowser } from './form-filler.js';
 
 const app = express();
-app.use(express.json({ limit: '256kb' }));
+app.use(express.json({ limit: '2mb' }));
 
-// ─── Auth simple ────────────────────────────────────────────────────────────
-app.use((req, res, next) => {
-  if (req.path === '/health') return next();
-  if (!TOKEN) return next(); // modo dev sin token
-  if (req.header('X-Publisher-Token') !== TOKEN) {
-    res.status(401).json({ error: 'Unauthorized' });
+const SHARED_TOKEN = process.env.FRAMER_PUBLISHER_TOKEN || '';
+
+function requireToken(req: Request, res: Response, next: NextFunction): void {
+  if (!SHARED_TOKEN) {
+    next();
+    return;
+  }
+  const got = (req.headers['x-publisher-token'] as string) || '';
+  if (got !== SHARED_TOKEN) {
+    res.status(401).json({ ok: false, error: 'Token inválido.' });
     return;
   }
   next();
-});
-
-// ─── Endpoints ──────────────────────────────────────────────────────────────
-
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'framer-publisher', port: PORT });
-});
-
-app.get('/noticias', async (_req, res, next) => {
-  try {
-    const items = await listNoticias();
-    res.json({ count: items.length, items });
-  } catch (err) {
-    next(err);
-  }
-});
+}
 
 interface NoticiaBody {
-  title: string;
-  link: string;
-  date?: string;
-  content?: string;
-  metaDescription?: string;
-  slug?: string;
-  imageUrl?: string;
-  featured?: boolean;
-  /** Si true, intenta extraer og:image de `link` cuando imageUrl falta. */
-  autoOgImage?: boolean;
+  nombreYApellido?: string;
+  fechaIncidente?: string;
+  horaIncidente?: string | null;
+  provincia?: string;
+  direccionLocalidad?: string;
+  tipoIncidenteFramer?: string;
+  fuerzaInterviniente?: string;
+  tipoVehiculo?: string;
+  cargaTransportada?: string;
+  modusOperandi?: string;
+  huboViolencia?: string;
+  tipoVehiculoInvolucrado?: string;
+  cantidadVehiculosInvolucrados?: string;
+  cantidadPersonasInvolucradas?: string;
+  descripcionDelHecho?: string | null;
 }
 
-app.post('/noticia', async (req, res, next) => {
+app.post('/noticia', requireToken, async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as NoticiaBody;
+
+  // Validar campos obligatorios
+  const obligatorios: Array<keyof NoticiaBody> = [
+    'nombreYApellido',
+    'fechaIncidente',
+    'provincia',
+    'direccionLocalidad',
+    'tipoIncidenteFramer',
+    'fuerzaInterviniente',
+    'tipoVehiculo',
+    'cargaTransportada',
+    'modusOperandi',
+    'huboViolencia',
+    'tipoVehiculoInvolucrado',
+    'cantidadVehiculosInvolucrados',
+    'cantidadPersonasInvolucradas',
+  ];
+  const faltantes = obligatorios.filter((k) => !body[k]);
+  if (faltantes.length > 0) {
+    res.status(400).json({
+      ok: false,
+      error: 'Faltan campos obligatorios.',
+      faltantes,
+    });
+    return;
+  }
+
   try {
-    const b = req.body as NoticiaBody;
-    if (!b?.title || !b?.link) {
-      res.status(400).json({ error: 'title y link son requeridos' });
-      return;
-    }
-
-    const date =
-      b.date && /^\d{4}-\d{2}-\d{2}$/.test(b.date)
-        ? b.date
-        : new Date().toISOString().slice(0, 10);
-
-    let imageUrl = b.imageUrl?.trim() || undefined;
-    if (!imageUrl && b.autoOgImage !== false) {
-      const og = await extractOgImage(b.link);
-      if (og) imageUrl = og;
-    }
-
-    const slug = b.slug?.trim() || buildSlug(b.title, String(Date.now()).slice(-6));
-
-    const input: PublishInput = {
-      title: b.title.trim(),
-      link: b.link.trim(),
-      date,
-      content: b.content?.trim() || `<p>${b.title.trim()}</p>`,
-      metaDescription:
-        b.metaDescription?.trim() || b.title.trim().slice(0, 160),
-      slug,
-      imageUrl,
-      featured: b.featured ?? false,
-    };
-
-    const result = await publishNoticia(input);
-    res.json({ ok: true, ...result, imageUrl: imageUrl ?? null });
+    const result = await postearReporte({
+      nombreYApellido: body.nombreYApellido!,
+      fechaIncidente: body.fechaIncidente!,
+      horaIncidente: body.horaIncidente ?? null,
+      provincia: body.provincia!,
+      direccionLocalidad: body.direccionLocalidad!,
+      tipoIncidenteFramer: body.tipoIncidenteFramer!,
+      fuerzaInterviniente: body.fuerzaInterviniente!,
+      tipoVehiculo: body.tipoVehiculo!,
+      cargaTransportada: body.cargaTransportada!,
+      modusOperandi: body.modusOperandi!,
+      huboViolencia: body.huboViolencia!,
+      tipoVehiculoInvolucrado: body.tipoVehiculoInvolucrado!,
+      cantidadVehiculosInvolucrados: body.cantidadVehiculosInvolucrados!,
+      cantidadPersonasInvolucradas: body.cantidadPersonasInvolucradas!,
+      descripcionDelHecho: body.descripcionDelHecho ?? null,
+    });
+    res.json(result);
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 });
 
-app.delete('/noticia/:itemId', async (req, res, next) => {
+app.get('/health', requireToken, async (_req: Request, res: Response) => {
   try {
-    const itemId = String(req.params.itemId || '').trim();
-    if (!itemId) {
-      res.status(400).json({ error: 'itemId requerido' });
-      return;
-    }
-    const removed = await removeNoticia(itemId);
-    if (!removed) {
-      res.status(404).json({ ok: false, error: 'Item no encontrado en Framer' });
-      return;
-    }
-    res.json({ ok: true, itemId, removed: true });
+    const h = await healthcheck();
+    res.json(h);
   } catch (err) {
-    next(err);
+    res.status(500).json({
+      alive: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 });
 
-app.post('/publish', async (_req, res, next) => {
-  try {
-    const result = await publishSite();
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    next(err);
-  }
+const port = parseInt(process.env.PORT || '4001', 10);
+const server = app.listen(port, () => {
+  console.log(`[framer-publisher v2] escuchando en http://127.0.0.1:${port}`);
+  console.log(`  Sitio destino: https://pirateriadecamiones.com.ar/formulario-de-incidentes`);
+  console.log(`  Token auth: ${SHARED_TOKEN ? 'configurado' : 'NO configurado (modo abierto)'}`);
 });
 
-app.post('/og-image', async (req, res, next) => {
-  try {
-    const { url } = req.body as { url?: string };
-    if (!url) {
-      res.status(400).json({ error: 'url requerida' });
-      return;
-    }
-    const og = await extractOgImage(url);
-    res.json({ url: og });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── Error handler ──────────────────────────────────────────────────────────
-app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
-  const message = err instanceof Error ? err.message : String(err);
-  const stack = err instanceof Error ? err.stack : undefined;
-  console.error(`[framer-publisher] error en ${req.method} ${req.path}:`, message);
-  if (stack) console.error(stack);
-  res.status(500).json({ error: message });
-});
-
-// ─── Start ──────────────────────────────────────────────────────────────────
-const server = app.listen(PORT, '127.0.0.1', () => {
-  console.log(`[framer-publisher] escuchando en http://127.0.0.1:${PORT}`);
-  if (!TOKEN) console.warn('[framer-publisher] sin FRAMER_PUBLISHER_TOKEN — modo dev sin auth');
-});
-
-// ─── Shutdown limpio ────────────────────────────────────────────────────────
-async function shutdown(signal: string) {
-  console.log(`[framer-publisher] ${signal} recibido, cerrando...`);
-  server.close(() => {
-    void disconnectFramer().finally(() => process.exit(0));
-  });
-  setTimeout(() => process.exit(1), 5000).unref();
+async function shutdown(signal: string): Promise<void> {
+  console.log(`\n[framer-publisher v2] señal ${signal}, cerrando...`);
+  server.close();
+  await disconnectBrowser();
+  process.exit(0);
 }
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
 process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
