@@ -235,9 +235,11 @@ export async function postearReporte(input: ReporteFormInput): Promise<SubmitRes
     if (input.horaIncidente) {
       await page.locator('input[name="Hora del Incidente"]').first().fill(input.horaIncidente);
     }
-    // Dirección/Localidad: el input visible es type=text, NO el hidden "address"
+    // Dirección/Localidad: el input visible tiene id="addr-*" + placeholder
+    // "Dirección" (sin tilde en el campo aunque el label dice "Dirección").
+    // Su `name` está vacío así que matcheamos por id^=addr- o por placeholder.
     await page
-      .locator('input[type="text"][placeholder="Dirección"]')
+      .locator('input[id^="addr-"], input[placeholder="Dirección"]')
       .first()
       .fill(input.direccionLocalidad);
 
@@ -275,18 +277,21 @@ export async function postearReporte(input: ReporteFormInput): Promise<SubmitRes
     await page.locator('input[type="submit"][value="Enviar Reporte"], button:has-text("Enviar Reporte")').first().click();
     await page.waitForTimeout(4000);
 
-    // Verificación: el form puede:
-    //  - redirigir a /gracias o similar
-    //  - mostrar un mensaje de "Reporte enviado"
-    //  - quedarse en /formulario-de-incidentes con form limpio
+    // Verificación de éxito (Sprint pivot-framer-form 2026-06-26 — confirmado
+    // empíricamente con smoke real): el sitio NO redirige, queda en
+    // /formulario-de-incidentes pero el body muestra "Reporte Enviado" como
+    // confirmación visible.
     const urlFinal = page.url();
-    const bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 500) || '');
+    const bodyText = await page.evaluate(() => document.body?.innerText || '');
+    const bodyLower = bodyText.toLowerCase();
     const success =
+      bodyLower.includes('reporte enviado') ||
+      bodyLower.includes('reporte recibido') ||
+      bodyLower.includes('enviado correctamente') ||
+      bodyLower.includes('gracias por tu reporte') ||
+      bodyLower.includes('gracias por su reporte') ||
       urlFinal.toLowerCase().includes('gracias') ||
-      urlFinal.toLowerCase().includes('enviado') ||
-      bodyText.toLowerCase().includes('gracias') ||
-      bodyText.toLowerCase().includes('enviado correctamente') ||
-      bodyText.toLowerCase().includes('reporte recibido');
+      urlFinal.toLowerCase().includes('enviado');
 
     // Persistir cookies actualizadas
     await saveStorage(ctx, cfg.storageStatePath).catch(() => {});

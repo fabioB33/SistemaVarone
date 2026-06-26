@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 *.log
+# Sprint pivot-framer-form: cookies/sesión Playwright persistidas (sensible).
+data/
