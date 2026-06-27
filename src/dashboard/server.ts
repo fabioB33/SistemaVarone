@@ -467,6 +467,45 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
+  // Sprint hardening 13-mejoras (2026-06-27): reintento de UN reporte específico.
+  // Útil para los que quedaron en `fallo_publicacion` y Varone quiere reintentar.
+  // Resetea framerIntentos a 0 + estado a 'aprobado' antes de invocar enviarAFramer.
+  app.post('/api/framer/reintentar-uno/:id', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ ok: false, error: 'id inválido' });
+        return;
+      }
+      const reporte = await prisma.reporte.findUnique({ where: { id } });
+      if (!reporte) {
+        res.status(404).json({ ok: false, error: 'reporte no encontrado' });
+        return;
+      }
+      if (!['fallo_publicacion', 'aprobado'].includes(reporte.estado)) {
+        res.status(400).json({
+          ok: false,
+          error: `solo se puede reintentar reportes en 'fallo_publicacion' o 'aprobado' (estado actual: ${reporte.estado})`,
+        });
+        return;
+      }
+
+      // Reset para que reintentarFramerPendientes lo levante en su próximo ciclo
+      // y el backoff no lo bloquee. estado 'aprobado' es el que enviarAFramer espera.
+      await prisma.reporte.update({
+        where: { id },
+        data: { framerIntentos: 0, estado: 'aprobado', framerEnviado: false },
+      });
+
+      const { enviarAFramer } = await import('../services/framer');
+      const result = await enviarAFramer(id);
+      res.json({ ok: result.ok, error: result.error });
+    } catch (error) {
+      console.error('[Dashboard] Error en reintento individual Framer:', error);
+      res.status(500).json({ ok: false, error: 'Error al reintentar' });
+    }
+  });
+
   // ─── Flujo de aprobación humana (Framer Server API) ───────────────────────
 
   // API: listar reportes por estado (default: pendientes).
@@ -499,6 +538,57 @@ export function startDashboard(port: number = 3000) {
     } catch (error) {
       console.error('[Dashboard] Error contando pendientes_revision:', error);
       res.status(500).json({ ok: false, error: 'Error al contar' });
+    }
+  });
+
+  // Sprint hardening 13-mejoras (2026-06-27): contador de fallos para el badge.
+  app.get('/api/aprobacion/contar-fallos-publicacion', async (_req, res) => {
+    try {
+      const count = await prisma.reporte.count({ where: { estado: 'fallo_publicacion' } });
+      res.json({ ok: true, count });
+    } catch (error) {
+      console.error('[Dashboard] Error contando fallos:', error);
+      res.status(500).json({ ok: false, error: 'Error al contar' });
+    }
+  });
+
+  // Sprint hardening 13-mejoras (2026-06-27): proxy al /health del framer-publisher
+  // para que el admin pueda monitorear su estado (sesión Framer activa? browser
+  // OK?) sin necesidad de exponer el token del publisher al frontend.
+  app.get('/api/framer/health', async (_req, res) => {
+    try {
+      const url = `${ENV.FRAMER_PUBLISHER_URL}/health`;
+      const r = await fetch(url, {
+        headers: { 'X-Publisher-Token': ENV.FRAMER_PUBLISHER_TOKEN },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!r.ok) {
+        res.status(502).json({
+          ok: false,
+          publisherStatus: 'down',
+          httpStatus: r.status,
+          error: `Publisher retornó ${r.status}`,
+        });
+        return;
+      }
+      const data = (await r.json()) as { alive?: boolean; logged?: boolean; error?: string };
+      const alive = data.alive ?? false;
+      const logged = data.logged ?? false;
+      // healthy = browser vivo + sesión activa al sitio público
+      const status: 'healthy' | 'degraded' | 'down' = alive && logged ? 'healthy' : alive ? 'degraded' : 'down';
+      res.json({
+        ok: true,
+        publisherStatus: status,
+        browserAlive: alive,
+        sessionActive: logged,
+        error: data.error,
+      });
+    } catch (error) {
+      res.status(503).json({
+        ok: false,
+        publisherStatus: 'unreachable',
+        error: error instanceof Error ? error.message : 'desconocido',
+      });
     }
   });
 

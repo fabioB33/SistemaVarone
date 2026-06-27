@@ -1,9 +1,9 @@
 # Sistema Varone — Road Safety Monitor
 
 > [!danger] Reglas universales Pampa Labs OS aplicables aquí (heredadas del CLAUDE.md raíz)
-> Las **11 reglas absolutas** del CLAUDE.md raíz (`/Users/elizabethuribe/Pampa-Labs-Core/CLAUDE.md`) aplican tal cual. Las dos más críticas:
-> - **Regla #9 NO-HARDCODED (formalizada 2026-05-09):** PROHIBIDO hardcodear números WhatsApp, group IDs, prompt template, account IDs, URLs Framer prod, env vars. **HARDCODED es mala palabra.** Schema-driven + env vars siempre.
-> - **Regla #10 VAULT-LOOKUP-BEFORE-INSTRUCT (formalizada 2026-05-09):** ANTES de cada respuesta mencionando paths, services, env vars, group IDs, sprint numbers → ejecutar `grep -rn "<sustantivo>" docs/vault/ products/sistema-varone/CLAUDE.md /Users/elizabethuribe/Pampa-Labs-Core/CLAUDE.md` + pegar bloque visible `[VAULT-CHECK pre-respuesta]`.
+> Las **11 reglas absolutas** del CLAUDE.md raíz aplican tal cual. Las dos más críticas:
+> - **Regla #9 NO-HARDCODED:** PROHIBIDO hardcodear números WhatsApp, group IDs, prompt template, account IDs, URLs Framer prod, env vars. Schema-driven + env vars siempre.
+> - **Regla #10 VAULT-LOOKUP-BEFORE-INSTRUCT:** ANTES de cada respuesta mencionando paths, services, env vars, group IDs, sprint numbers → ejecutar grep al vault + pegar bloque visible `[VAULT-CHECK pre-respuesta]`.
 >
 > Ver [[../../docs/vault/lessons-learned/LL-2026-05-09-no-hardcoded-law-pampa-labs]] + [[../../docs/vault/lessons-learned/LL-2026-05-09-vault-lookup-before-instruct]].
 
@@ -11,9 +11,9 @@
 
 ## Qué es
 
-Sistema de monitoreo automatizado de seguridad vial que detecta y trackea incidentes de "piratas del asfalto" (robos de carga, asaltos, bloqueos) en rutas argentinas. Opera 24/7 escuchando un grupo de WhatsApp y procesando los mensajes con IA para alimentar un panel de aprobación humana antes de publicar en Framer.
+Sistema de monitoreo automatizado de seguridad vial que detecta y trackea incidentes de "piratas del asfalto" (robos de carga, asaltos, bloqueos) en rutas argentinas. Opera 24/7 escuchando un grupo de WhatsApp y procesando los mensajes con IA para alimentar un panel de aprobación humana antes de publicar.
 
-## Cómo funciona
+## Cómo funciona (post-Sprint pivot-framer-form 2026-06-26 + hardening 2026-06-27)
 
 ```
 WhatsApp Agent (tiempo real, grupo "Piratería de Camiones")
@@ -21,9 +21,10 @@ WhatsApp Agent (tiempo real, grupo "Piratería de Camiones")
                    ▼
             Pipeline Service
             (cola FIFO, enriquece URL si tiene link)
+            + spike detector persistente en DB
                    │
                    ▼
-         AI Service (Gemini / OpenAI fallback)
+         AI Service (Gemini + retries exponential backoff)
             ¿Es relevante?
            /              \
          NO               SÍ
@@ -31,17 +32,41 @@ WhatsApp Agent (tiempo real, grupo "Piratería de Camiones")
                      ¿Duplicado?
                     /           \
                   SÍ            NO
-               Descarta    Registra en PostgreSQL (estado=pendiente)
+               Descarta    Enum-matcher fuzzy (10 dropdowns canonical)
                                 │
-                                ▼
-                    Notificación a Varone vía WhatsApp
-                    (links HMAC firmados Aprobar/Descartar)
-                                │
-                                ▼
-                    Panel admin Next.js (:3001)
-                    Varone aprueba → draft Framer
-                    Cron 9 AM → publish sitio Framer
+                          ¿Todos los campos OK?
+                          /              \
+                         NO              SÍ
+              registro:pendiente_revision  registro:pendiente
+                  (badge amber)              (notif Varone WA)
+                          │                          │
+                          ▼                          ▼
+                Panel admin Next.js (:3001)
+                ├── /pendientes-revision (form de dropdowns faltantes)
+                ├── /aprobacion (aprobar / descartar / despublicar)
+                ├── /errores-publicacion (reintentar / descartar fallos)
+                │
+                ▼
+       Aprobado → enviarAFramer()
+                          │
+                          ▼
+         framer-publisher v2 (:4001, Playwright)
+         login + llena form público + submit
+                          │
+                          ▼
+       pirateriadecamiones.com.ar (auto-rebuild Framer)
+       estado=publicado | fallo_publicacion (badge rojo)
 ```
+
+## Los 3 servicios (no confundir puertos)
+
+| Puerto | Qué es | Quién lo usa |
+|---|---|---|
+| `:3000` | **Backend Express** sin UI (API + lógica + DB + WA agent) | Frontend `:3001` consume vía X-Backend-Token |
+| `:3001` | **Admin panel Next.js** con UI (login, /aprobacion, /pendientes-revision, /errores-publicacion) | **Varone abre acá en browser** |
+| `:4001` | **Framer publisher** Playwright (form filler) | Backend `:3000` lo invoca para postear |
+
+El sitio público `pirateriadecamiones.com.ar` **NO está en estos puertos** — vive en Framer.
 
 ## Stack
 
@@ -50,100 +75,132 @@ WhatsApp Agent (tiempo real, grupo "Piratería de Camiones")
 | Lenguaje | TypeScript (strict mode) |
 | Runtime | Node.js 20+ |
 | WhatsApp | whatsapp-web.js (Puppeteer) |
-| IA (primario) | Google Gemini (`gemini-2.5-flash`) |
+| IA (primario) | Google Gemini (`gemini-2.5-flash`) + retries 3 con exponential backoff |
 | IA (alternativo) | OpenAI (`gpt-4o-mini`) |
-| Base de datos | PostgreSQL 16 (Prisma ORM) |
+| Base de datos | PostgreSQL 16 (Prisma ORM con migrations formales desde Sprint hardening) |
 | Scheduler | node-cron |
+| Form filler público | Playwright (chromium headless 1228) + sesión persistida JSON |
 | Deploy | Docker + Docker Compose |
-| Output | Framer Server API (vía microservicio framer-publisher) |
+| Observability | Sentry idle (activar con SENTRY_DSN) + Pino structured logs |
 
-## Arquitectura
+## Estados del flujo
 
-### Agents (entrada de datos)
-
-- **WhatsApp Agent** (`src/agents/whatsapp.ts`): única fuente de entrada del sistema. Escucha el grupo configurado via `WA_GROUP_NAME`, extrae metadata del mensaje y lo envía al pipeline. Auto-reconexión con backoff exponencial, watchdog zombie de 6h, refresh automático de QR cada 50s. Si el mensaje contiene una URL, el pipeline hace fetch del HTML del artículo para enriquecer el contexto antes de pasarlo a la IA.
-
-### Services (procesamiento)
-
-- **Pipeline** (`src/services/pipeline.ts`): orquesta el flujo completo texto → IA → dedup → registro → webhook.
-- **IA** (`src/services/ia.ts`): clasifica textos como relevantes/no-relevantes y estructura los incidentes en JSON. Soporta Gemini o OpenAI via `AI_PROVIDER`.
-- **Dedup** (`src/services/dedup.ts`): normaliza texto, genera hash SHA256, verifica unicidad contra PostgreSQL.
-- **Framer** (`src/services/framer.ts`): POST al endpoint de Framer con el reporte estructurado.
-
-### Config
-
-- **Prompts** (`src/config/prompts.ts`): system prompt especializado en seguridad vial.
-- **Env** (`src/config/env.ts`): variables de entorno tipadas.
-
-## Modelo de datos
-
-**Tabla única: `reportes`** (Prisma)
-
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| id | Int (autoincrement) | PK |
-| hash | String (unique) | SHA256 para dedup |
-| fuente | String | 'whatsapp' (única fuente actual) |
-| fecha | String | YYYY-MM-DD |
-| ubicacion | String | Localidad/ciudad |
-| ruta | String | Nombre de ruta |
-| tipoIncidente | String | robo_de_carga \| asalto \| bloqueo \| alerta \| tentativa |
-| descripcion | String | Resumen 1-2 oraciones |
-| textoOriginal | String | Texto crudo de entrada |
-| urlNoticia | String? | URL del artículo si el mensaje WA contenía un link |
-| creadoEn | DateTime | Timestamp auto |
-
-## Comandos
-
-```bash
-# Desarrollo
-npm run dev              # tsx watch src/index.ts
-
-# Build y producción
-npm run build            # tsc → dist/
-npm start                # node dist/index.js
-
-# Base de datos
-npm run db:generate      # prisma generate
-npm run db:push          # prisma db push
-npm run db:studio        # Prisma Studio GUI
-
-# Tests / utilidades
-npm run test:ia          # Test clasificación IA
-npm run test:dedup       # Test deduplicación
-npm run seed:demo        # Carga 8 reportes mock para demo
-
-# Docker
-docker compose -f docker/docker-compose.yml up -d
-```
+| Estado | Significado | UI dedicada |
+|---|---|---|
+| `pendiente` | Aprobable por Varone | `/aprobacion?estado=pendiente` |
+| `pendiente_revision` | Faltan dropdowns por completar (IA no decidió) | `/pendientes-revision` (badge amber) |
+| `aprobado` | OK para publicar, en cola publisher | `/aprobacion?estado=aprobado` |
+| `publicado` | Posteado al form público OK | `/aprobacion?estado=publicado` |
+| `descartado` | No publicable | `/aprobacion?estado=descartado` |
+| `fallo_publicacion` | Publisher agotó reintentos | `/errores-publicacion` (badge rojo) |
 
 ## Variables de entorno
 
 ```bash
+# Base de datos
 DATABASE_URL=postgresql://varone:varone_secret@localhost:5432/sistema_varone
+
+# IA
 AI_PROVIDER=gemini                    # 'gemini' | 'openai'
 GEMINI_API_KEY=tu_api_key
 OPENAI_API_KEY=                       # solo si AI_PROVIDER=openai
+
+# WhatsApp
 WA_GROUP_NAME=Piratería de Camiones   # grupo exacto a monitorear (con tildes)
-FRAMER_PUBLISHER_URL=http://127.0.0.1:4001  # microservicio publisher
-FRAMER_PUBLISHER_TOKEN=                 # token compartido con publisher
+VARONE_WA_NUMBER=5491144462389        # destino de alertas operacionales
+
+# Framer publisher (microservicio Playwright)
+FRAMER_PUBLISHER_URL=http://127.0.0.1:4001
+FRAMER_PUBLISHER_TOKEN=               # token compartido
+
+# Admin panel (Next.js :3001)
+BACKEND_API_TOKEN=                    # token bypass server-to-server
+ADMIN_PUBLIC_URL=http://localhost:3001
+
+# Sprint hardening 13-mejoras (2026-06-27)
+SENTRY_DSN=                           # opcional — observability prod
+ADMIN_PASS_BCRYPT=                    # opcional — preferido vs ADMIN_PASS plaintext
+
+# Alertas Telegram (opcional)
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+
 NODE_ENV=development
 LOG_LEVEL=info
 ```
 
-## Testing
+## Comandos
 
-El proyecto incluye datos simulados (`src/test/mensajes-simulados.ts`) con:
-- 10 mensajes WhatsApp relevantes (robos, asaltos, bloqueos)
-- 10 mensajes irrelevantes (personales, comercio)
+```bash
+# Backend (:3000)
+npm run dev              # tsx watch src/index.ts
+npm run build            # tsc → dist/
+npm start                # node dist/index.js
 
-Los tests (`npm run test:ia`, `npm run test:dedup`) validan clasificación IA y deduplicación.
+# Admin panel (:3001)
+cd varone-admin && npm run dev    # next dev -p 3001
+cd varone-admin && npm run build  # next build
 
-`npm run seed:demo` carga 8 reportes en distintos estados (pendiente / aprobado / publicado / descartado) para poblar el panel durante demos.
+# Framer publisher (:4001)
+cd framer-publisher && npm run dev   # tsx watch src/server.ts
+
+# Base de datos
+npm run db:generate      # prisma generate
+npm run db:push          # prisma db push (dev)
+npx prisma migrate deploy  # producción (después del Sprint hardening 2026-06-27)
+npm run db:studio        # Prisma Studio GUI
+
+# Tests
+npm run test             # vitest run (enum-matcher + ia)
+npm run test:ia          # Test clasificación IA
+npm run test:dedup       # Test deduplicación
+npm run seed:demo        # Carga 8 reportes mock
+
+# Docker
+docker compose -f docker/docker-compose.yml -p sistema-varone up -d
+```
+
+## Tabla `reportes` (Prisma) — campos clave
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | Int (autoincrement) | PK |
+| `hash` | String (unique) | SHA256 para dedup |
+| `estado` | String | enum: pendiente / pendiente_revision / aprobado / publicado / descartado / fallo_publicacion |
+| `camposFaltantes` | String[] | Lista de dropdowns que la IA no pudo decidir (vacía = OK) |
+| `framerIntentos` | Int | Reintentos consumidos del publisher |
+| `framerEnviado` | Bool | true si llegó a publicarse al form público |
+
+**Campos Framer canonical** (los 10 que el form público requiere):
+`provincia`, `tipoIncidenteFramer`, `fuerzaInterviniente`, `tipoVehiculo`, `cargaTransportada`, `modusOperandi`, `huboViolencia`, `tipoVehiculoInvolucrado`, `cantidadVehiculosInvolucrados`, `cantidadPersonasInvolucradas`.
+
+## Endpoints clave (backend :3000)
+
+| Método | Path | Descripción |
+|---|---|---|
+| GET | `/api/aprobacion/lista?estado=X` | Lista reportes por estado |
+| GET | `/api/aprobacion/contar-pendientes-revision` | Count para badge amber |
+| GET | `/api/aprobacion/contar-fallos-publicacion` | Count para badge rojo |
+| POST | `/api/aprobacion/aprobar` | Mover a aprobado → dispara publisher |
+| POST | `/api/aprobacion/editar` | Edita campos + recalcula camposFaltantes + auto-transición |
+| POST | `/api/aprobacion/descartar` | Mover a descartado |
+| POST | `/api/framer/reintentar` | Reintenta TODOS los pendientes Framer |
+| POST | `/api/framer/reintentar-uno/:id` | Reintenta UN reporte en fallo_publicacion |
+| GET | `/api/framer/health` | Proxy al health del publisher (browser + sesión) |
+| POST | `/api/inyectar-mensaje` | Inyección manual de texto (cuando bot WA caído) |
+
+## Pendientes operativos
+
+Después del Sprint hardening 13-mejoras (2026-06-27), quedan estos cleanups:
+
+- [ ] Retire `publicarSitio()` + cron 9 AM/21:00 + endpoint POST `/api/framer/publicar` (todos no-op desde v2)
+- [ ] Migración `prisma migrate deploy` en VPS (la baseline ya está marcada como applied en dev)
+- [ ] Activar Sentry seteando `SENTRY_DSN` cuando se llegue a deploy
+- [ ] Generar hash bcrypt y mover `ADMIN_PASS` → `ADMIN_PASS_BCRYPT`
 
 ## Inyección manual de mensajes
 
-Endpoint de respaldo cuando el bot WA no puede recibir mensajes (por ejemplo si la lib whatsapp-web.js está desactualizada respecto al frontend de WA Web). Pasa el texto al pipeline como si hubiera entrado del grupo:
+Cuando el bot WA no puede recibir mensajes:
 
 ```bash
 curl -X POST http://127.0.0.1:3000/api/inyectar-mensaje \

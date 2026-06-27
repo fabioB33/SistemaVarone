@@ -166,6 +166,52 @@ export async function backupDiario(): Promise<void> {
 }
 
 /**
+ * Sprint hardening 13-mejoras (2026-06-27) — Backup del session storage de
+ * whatsapp-web.js (.wwebjs_auth/). Sin esto, si el container se reinicia con
+ * volumen perdido, Varone tiene que volver a escanear el QR → downtime del bot.
+ *
+ * Estrategia: tar.gz del directorio + guardar al lado de los backups DB.
+ * Sobrevivir restart del container es responsabilidad del volumen Docker;
+ * acá cubrimos el caso "pérdida total del volumen" (raro pero catastrófico).
+ */
+export async function backupWaSession(): Promise<{ ok: boolean; file?: string; size?: number; error?: string }> {
+  try {
+    const { execSync } = await import('node:child_process');
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+
+    // Path canonical del session storage de whatsapp-web.js
+    // (relativo a CWD del backend — siempre `products/sistema-varone/`).
+    const sessionDir = path.join(process.cwd(), '.wwebjs_auth');
+    if (!fs.existsSync(sessionDir)) {
+      logger.warn('[Backup] .wwebjs_auth no existe (bot WA nunca corrió). Skip.');
+      return { ok: false, error: 'sessionDir-missing' };
+    }
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const outDir = path.join(process.cwd(), 'backups');
+    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+    const outFile = path.join(outDir, `wa-session-${dateStr}.tar.gz`);
+
+    // tar -czf (z=gzip, c=create, f=file). cwd para evitar paths absolutos
+    // adentro del tar.
+    execSync(`tar -czf "${outFile}" .wwebjs_auth`, {
+      cwd: process.cwd(),
+      stdio: 'pipe',
+    });
+
+    const stats = fs.statSync(outFile);
+    const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
+    logger.info(`[Backup] WA session OK ${path.basename(outFile)} (${sizeMb} MB)`);
+    return { ok: true, file: outFile, size: stats.size };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`[Backup] WA session falló: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+/**
  * Stats de backups para mostrar en panel.
  */
 export async function statsBackups(): Promise<{

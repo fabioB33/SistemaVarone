@@ -187,25 +187,21 @@ export async function healthcheckPublisher(): Promise<{ alive: boolean; logged: 
 }
 
 /**
- * Compat v1: `borrarItemFramer` ya no aplica porque el form público no expone
- * delete. Mantengo el export para no romper imports, pero retorna false.
+ * @deprecated Sprint hardening 13-mejoras (2026-06-27): publicarSitio era un
+ * no-op desde el pivot v2 (commit `e2a179af`) pero quedó wireada en 3 lugares
+ * (cron 9 AM + cron 21:00 + endpoint POST /api/framer/publicar).
  *
- * Si Varone quiere despublicar, lo único viable es:
- *  - Marcar el reporte en estado='descartado' en nuestra DB.
- *  - Contactar a admin del sitio para borrar el item del form si es necesario.
- */
-export async function borrarItemFramer(_itemId: string): Promise<boolean> {
-  logger.warn(
-    '[Framer] borrarItemFramer ya no aplica en v2 (form público sin delete). Marcar estado=descartado en nuestra DB.',
-  );
-  return false;
-}
-
-/**
- * Compat v1: `publicarSitio` no aplica — el sitio público se rebuilds solo
- * al recibir el form. Mantengo el export por compat.
+ * Mantengo por compat de los callers existentes hasta el siguiente sprint donde
+ * los retire también. Retorna deploymentId fake con timestamp para que
+ * `marcarPublicadosTrasPublish` no rompa downstream.
+ *
+ * Plan de retire (TODO Sprint+1):
+ *  - Remover los 2 cron.schedule en index.ts:131-134
+ *  - Remover endpoint /api/framer/publicar en dashboard/server.ts:790
+ *  - Remover esta función + el call a marcarPublicadosTrasPublish que se vuelve
+ *    inalcanzable.
  */
 export async function publicarSitio(): Promise<{ deploymentId: string } | null> {
-  logger.warn('[Framer] publicarSitio ya no aplica en v2 (form público auto-rebuilds).');
-  return null;
+  logger.warn('[Framer] publicarSitio es no-op desde v2 (form público auto-rebuilds). Retire pendiente.');
+  return { deploymentId: `noop-v2-${Date.now()}` };
 }

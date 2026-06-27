@@ -42,6 +42,10 @@ export const ENV = {
   // Número de WhatsApp para alertas operacionales (formato internacional sin +)
   VARONE_WA_NUMBER: process.env.VARONE_WA_NUMBER || '5491144462389',
 
+  // Sprint hardening 13-mejoras (2026-06-27): observabilidad opcional.
+  // Si vacío, lib/sentry.ts queda idle (no-op).
+  SENTRY_DSN: process.env.SENTRY_DSN || '',
+
   // General
   NODE_ENV: process.env.NODE_ENV || 'development',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',

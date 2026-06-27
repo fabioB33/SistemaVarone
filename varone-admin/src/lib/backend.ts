@@ -145,6 +145,17 @@ export async function contarPendientesRevision(): Promise<number> {
   return (r as unknown as { count?: number }).count ?? 0;
 }
 
+/**
+ * Sprint hardening 13-mejoras (2026-06-27): reintenta UN reporte específico
+ * de `fallo_publicacion`. Resetea intentos y dispara enviarAFramer inmediato.
+ */
+export async function reintentarUnReporte(id: number): Promise<{ ok: boolean; error?: string }> {
+  return backendFetch(`/api/framer/reintentar-uno/${id}`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 export async function aprobarReporte(
   id: number,
   aprobadoPor: string,

@@ -1,14 +1,32 @@
 import cron from 'node-cron';
 import { ENV } from './config/env';
+import { initSentry, captureException } from './lib/sentry';
+
+// Sprint hardening 13-mejoras: init Sentry ANTES de cualquier otro import
+// para capturar errores de boot. Idempotente: si DSN vacío, no-op.
+initSentry();
+
 import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
 import { enviarHealthcheck, verificarSaludWaSilencioso } from './services/healthcheck';
 import { publicarSitio } from './services/framer';
 import { marcarPublicadosTrasPublish } from './services/aprobacion';
-import { backupDiario } from './services/backups';
+import { backupDiario, backupWaSession } from './services/backups';
 import { ejecutarChequeosIA } from './services/health-ai';
 import logger from './services/logger';
+
+// Sprint hardening: capturar excepciones uncaught a Sentry (best-effort).
+process.on('uncaughtException', (err) => {
+  logger.error(`[uncaughtException] ${err.message}`);
+  captureException(err, { source: 'uncaughtException' });
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error(`[unhandledRejection] ${reason}`);
+  captureException(reason instanceof Error ? reason : new Error(String(reason)), {
+    source: 'unhandledRejection',
+  });
+});
 
 // Validar variables de entorno críticas antes de arrancar
 const erroresEnv: string[] = [];
@@ -119,8 +137,11 @@ async function main() {
 
   // Cron: backup diario de la DB a las 3:00 AM Argentina (hora de menor actividad).
   // El archivo va a backups/varone-YYYY-MM-DD.dump y se mantiene 30 días.
+  // Sprint hardening 13-mejoras (2026-06-27): también backupea .wwebjs_auth
+  // para no depender 100% del volumen Docker.
   cron.schedule('0 3 * * *', async () => {
     await backupDiario();
+    await backupWaSession();
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
   // Cron: chequeos de comportamiento de la IA cada hora.

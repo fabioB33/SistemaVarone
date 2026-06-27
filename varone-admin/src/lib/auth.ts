@@ -53,16 +53,49 @@ function decodeSession(token: string | undefined): SessionPayload | null {
   }
 }
 
-/** Verifica credenciales contra ADMIN_USER/PASS del entorno. */
+/**
+ * Sprint hardening 13-mejoras (2026-06-27): soporte bcrypt opcional.
+ *
+ * Prioridad de credenciales:
+ *  1. Si `ADMIN_PASS_BCRYPT` existe → bcrypt.compare (defensa en profundidad).
+ *  2. Si NO → fallback a timing-safe compare contra `ADMIN_PASS` plaintext
+ *     (backwards compat — el sistema arrancó con esto).
+ *
+ * Para activar bcrypt:
+ *   node -e "console.log(require('bcrypt').hashSync('varone2026', 12))"
+ *   → pegar el resultado en ADMIN_PASS_BCRYPT del .env
+ *   → comentar ADMIN_PASS (queda solo el hash)
+ */
 export function verifyCredentials(user: string, pass: string): boolean {
   const expectedUser = process.env.ADMIN_USER;
+  if (!expectedUser) return false;
+
+  // 1. Usuario debe matchear (timing-safe)
+  const userA = Buffer.from(user);
+  const userB = Buffer.from(expectedUser);
+  if (userA.length !== userB.length) return false;
+  if (!crypto.timingSafeEqual(userA, userB)) return false;
+
+  // 2. Bcrypt path (preferido)
+  const bcryptHash = process.env.ADMIN_PASS_BCRYPT;
+  if (bcryptHash) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const bcrypt = require('bcrypt') as { compareSync: (a: string, b: string) => boolean };
+      return bcrypt.compareSync(pass, bcryptHash);
+    } catch {
+      // bcrypt no instalado → fallback al plaintext (con warn)
+      console.warn('[Auth] ADMIN_PASS_BCRYPT seteado pero @types/bcrypt no instalado. Fallback a plaintext.');
+    }
+  }
+
+  // 3. Fallback: timing-safe compare contra plaintext (backwards compat)
   const expectedPass = process.env.ADMIN_PASS;
-  if (!expectedUser || !expectedPass) return false;
-  // Comparación timing-safe
-  const a = Buffer.from(`${user}:${pass}`);
-  const b = Buffer.from(`${expectedUser}:${expectedPass}`);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  if (!expectedPass) return false;
+  const passA = Buffer.from(pass);
+  const passB = Buffer.from(expectedPass);
+  if (passA.length !== passB.length) return false;
+  return crypto.timingSafeEqual(passA, passB);
 }
 
 export async function createSession(user: string): Promise<void> {

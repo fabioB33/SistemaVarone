@@ -7,22 +7,46 @@ import { ENV } from '../config/env';
 import logger from './logger';
 import prisma from './prisma';
 
-// F2: detectar spike — si entran N reportes relevantes en una ventana de tiempo, alertar
-const SPIKE_VENTANA_MS = 10 * 60 * 1000;  // 10 minutos
-const SPIKE_UMBRAL = 5;                    // 5 reportes en 10 min = posible incidente activo
-const timestampsRecientes: number[] = [];
+// Sprint hardening 13-mejoras (2026-06-27) — spike detector persistente.
+//
+// Antes: array en memoria que se perdía con cada restart.
+// Ahora: cuenta reportes en DB de los últimos 10 min. Sobrevive reinicios.
+//
+// Cooldown: para no spamear alertas (si entran 6, 7, 8 reportes seguidos
+// arriba del umbral), solo alertamos UNA VEZ por hora.
+const SPIKE_VENTANA_MS = 10 * 60 * 1000; // 10 minutos
+const SPIKE_UMBRAL = 5;                   // 5 reportes en 10 min
+const SPIKE_COOLDOWN_MS = 60 * 60 * 1000; // 1 hora sin re-alertar
+let ultimoAlertaSpike = 0;
 
 async function verificarSpike(): Promise<void> {
-  const ahora = Date.now();
-  // Limpiar entradas fuera de la ventana
-  while (timestampsRecientes.length > 0 && ahora - timestampsRecientes[0] > SPIKE_VENTANA_MS) {
-    timestampsRecientes.shift();
-  }
-  timestampsRecientes.push(ahora);
+  try {
+    const prismaModule = await import('./prisma');
+    const prisma = prismaModule.default;
+    const desde = new Date(Date.now() - SPIKE_VENTANA_MS);
+    const count = await prisma.reporte.count({ where: { creadoEn: { gte: desde } } });
 
-  if (timestampsRecientes.length === SPIKE_UMBRAL) {
-    const msg = `🚨 *Sistema Varone — Spike detectado*\n${SPIKE_UMBRAL} reportes en los últimos 10 minutos.\nPosible incidente activo en curso.`;
+    if (count < SPIKE_UMBRAL) return;
+    if (Date.now() - ultimoAlertaSpike < SPIKE_COOLDOWN_MS) return; // cooldown activo
+
+    ultimoAlertaSpike = Date.now();
+    const msg = `🚨 *Sistema Varone — Spike detectado*\n${count} reportes en los últimos 10 minutos.\nPosible incidente activo en curso.`;
     logger.warn(`[Pipeline] ${msg}`);
+
+    // Persistir como Alerta (tabla existente desde Sprint anterior)
+    try {
+      await prisma.alerta.create({
+        data: {
+          tipo: 'spike',
+          mensaje: msg,
+          severidad: 'warn',
+          meta: { count, ventana_min: SPIKE_VENTANA_MS / 60_000, umbral: SPIKE_UMBRAL },
+        },
+      });
+    } catch (e) {
+      logger.warn(`[Pipeline] No se pudo persistir alerta spike: ${e instanceof Error ? e.message : e}`);
+    }
+
     const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
     const telegramChatId = process.env.TELEGRAM_CHAT_ID;
     if (telegramToken && telegramChatId) {
@@ -30,8 +54,10 @@ async function verificarSpike(): Promise<void> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: telegramChatId, text: msg, parse_mode: 'Markdown' }),
-      }).catch(e => console.error('[Pipeline] Error enviando alerta spike:', e));
+      }).catch((e) => console.error('[Pipeline] Error enviando alerta spike:', e));
     }
+  } catch (err) {
+    logger.warn(`[Pipeline] verificarSpike falló: ${err instanceof Error ? err.message : err}`);
   }
 }
 

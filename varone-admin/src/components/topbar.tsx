@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { LogOut, Truck } from 'lucide-react';
 import { AlertasBadge } from './alertas-badge';
 import { PendientesRevisionBadge } from './pendientes-revision-badge';
+import { ErroresPublicacionBadge } from './errores-publicacion-badge';
+import { PublisherHealthBadge } from './publisher-health-badge';
 
 interface Props {
   user: string;
@@ -44,6 +46,8 @@ export function Topbar({ user }: Props) {
 
         {/* Right cluster */}
         <div className="flex items-center gap-3">
+          <PublisherHealthBadge />
+          <ErroresPublicacionBadge />
           <PendientesRevisionBadge />
           <AlertasBadge />
           <div className="hidden items-center gap-2 rounded-full border border-line bg-surface/60 px-3 py-1.5 text-xs sm:flex">

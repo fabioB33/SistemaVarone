@@ -13,7 +13,16 @@
 import { useState, useTransition } from 'react';
 import type { ReporteListItem, ReporteEditableFields } from '@/lib/backend';
 import { CAMPOS_FRAMER_SPEC, ORDEN_CAMPOS_FRAMER } from '@/lib/enums-framer';
+import { PENDIENTES_REVISION_REFRESH_EVENT } from '@/components/pendientes-revision-badge';
 import { completarCamposFramerAction, descartarPendienteRevisionAction } from './actions';
+
+// Sprint hardening 13-mejoras (2026-06-27): dispatch evento custom para que
+// el badge se refresque inmediato sin esperar el poll de 30s.
+function dispararRefreshBadge() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(PENDIENTES_REVISION_REFRESH_EVENT));
+  }
+}
 
 interface Props {
   reporte: ReporteListItem;
@@ -55,7 +64,11 @@ export function CompletarForm({ reporte }: Props) {
     startTransition(async () => {
       try {
         const r = await completarCamposFramerAction(reporte.id, cambios);
-        if (!r.ok) setError(r.error || 'Error desconocido');
+        if (!r.ok) {
+          setError(r.error || 'Error desconocido');
+        } else {
+          dispararRefreshBadge();
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Error inesperado');
       }
@@ -68,7 +81,11 @@ export function CompletarForm({ reporte }: Props) {
     startTransition(async () => {
       try {
         const r = await descartarPendienteRevisionAction(reporte.id);
-        if (!r.ok) setError(r.error || 'Error al descartar');
+        if (!r.ok) {
+          setError(r.error || 'Error al descartar');
+        } else {
+          dispararRefreshBadge();
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Error inesperado');
       }

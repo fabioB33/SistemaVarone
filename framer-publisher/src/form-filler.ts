@@ -224,8 +224,16 @@ export async function postearReporte(input: ReporteFormInput): Promise<SubmitRes
   const ctx = await getContext(cfg);
   const page = await ctx.newPage();
 
+  // Sprint hardening 13-mejoras (2026-06-27): timing por fase.
+  // Útil para detectar regresiones (¿Framer está más lento?, ¿se rompió un
+  // selector y estamos esperando 30s al timeout?). Loggeado al final con
+  // formato estructurado para grep.
+  const t = { start: performance.now(), login: 0, fill: 0, dropdowns: 0, submit: 0, verify: 0 };
+  const stamp = (key: keyof typeof t) => { t[key] = performance.now(); };
+
   try {
     await loginIfNeeded(page, cfg);
+    stamp('login');
 
     console.log('[form-filler] llenando campos text/date/time...');
 
@@ -243,6 +251,7 @@ export async function postearReporte(input: ReporteFormInput): Promise<SubmitRes
       .first()
       .fill(input.direccionLocalidad);
 
+    stamp('fill');
     console.log('[form-filler] seleccionando dropdowns...');
 
     await selectDropdownOption(page, 'Provincia', input.provincia);
@@ -271,11 +280,13 @@ export async function postearReporte(input: ReporteFormInput): Promise<SubmitRes
         .fill(input.descripcionDelHecho);
     }
 
+    stamp('dropdowns');
     console.log('[form-filler] submit...');
 
     // Submit
     await page.locator('input[type="submit"][value="Enviar Reporte"], button:has-text("Enviar Reporte")').first().click();
     await page.waitForTimeout(4000);
+    stamp('submit');
 
     // Verificación de éxito (Sprint pivot-framer-form 2026-06-26 — confirmado
     // empíricamente con smoke real): el sitio NO redirige, queda en
@@ -295,6 +306,18 @@ export async function postearReporte(input: ReporteFormInput): Promise<SubmitRes
 
     // Persistir cookies actualizadas
     await saveStorage(ctx, cfg.storageStatePath).catch(() => {});
+    stamp('verify');
+
+    // Sprint hardening 13-mejoras: log estructurado para grep/observabilidad.
+    const ms = {
+      login: Math.round(t.login - t.start),
+      fill: Math.round(t.fill - t.login),
+      dropdowns: Math.round(t.dropdowns - t.fill),
+      submit: Math.round(t.submit - t.dropdowns),
+      verify: Math.round(t.verify - t.submit),
+      total: Math.round(t.verify - t.start),
+    };
+    console.log(`[form-filler] timing success=${success} login=${ms.login}ms fill=${ms.fill}ms dropdowns=${ms.dropdowns}ms submit=${ms.submit}ms verify=${ms.verify}ms total=${ms.total}ms`);
 
     if (success) {
       return { ok: true, urlFinal, mensajeConfirmacion: bodyText.slice(0, 200) };

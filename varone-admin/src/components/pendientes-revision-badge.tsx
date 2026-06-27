@@ -2,56 +2,67 @@
 
 /**
  * Sprint pivot-framer-form (2026-06-26) — Badge en topbar.
+ * Sprint hardening 13-mejoras (2026-06-27) — refresh inmediato post-acción.
  *
- * Imita el patrón de AlertasBadge. Pollea cada 30s al endpoint
- * /api/pendientes-revision/count (proxy del backend).
+ * Pollea cada 30s al endpoint /api/pendientes-revision/count (proxy del backend).
+ * Además escucha el evento custom `varone:pendientes-revision-refresh` para
+ * actualizarse inmediatamente cuando una Server Action completa/descarta un
+ * reporte. Sin esto, el badge tardaba hasta 30s en reflejar el cambio.
  *
- * Si hay reportes en pendiente_revision:
- *   - Icon AlertTriangle animado.
- *   - Burbuja amber con el número.
- * Si no:
- *   - Icon CircleCheck muted.
+ * Para disparar el refresh desde otro componente:
+ *   window.dispatchEvent(new CustomEvent('varone:pendientes-revision-refresh'));
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, CircleCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const POLL_MS = 30_000;
+export const PENDIENTES_REVISION_REFRESH_EVENT = 'varone:pendientes-revision-refresh';
 
 export function PendientesRevisionBadge() {
   const [count, setCount] = useState(0);
   const [loaded, setLoaded] = useState(false);
+
+  const fetchCount = useCallback(async () => {
+    try {
+      const r = await fetch('/api/pendientes-revision/count', { cache: 'no-store' });
+      if (r.ok) {
+        const j = (await r.json()) as { count?: number };
+        setCount(j.count ?? 0);
+      }
+    } catch {
+      // backend caído u otro error transitorio — ignorar
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     async function tick() {
-      try {
-        const r = await fetch('/api/pendientes-revision/count', { cache: 'no-store' });
-        if (cancelled) return;
-        if (r.ok) {
-          const j = (await r.json()) as { count?: number };
-          setCount(j.count ?? 0);
-        }
-      } catch {
-        // backend caído u otro error transitorio — ignorar
-      } finally {
-        if (!cancelled) {
-          setLoaded(true);
-          timer = setTimeout(tick, POLL_MS);
-        }
-      }
+      if (cancelled) return;
+      await fetchCount();
+      if (!cancelled) timer = setTimeout(tick, POLL_MS);
     }
 
     tick();
+
+    // Sprint hardening 13-mejoras: refresh inmediato cuando alguien completa/descarta.
+    function onRefresh() {
+      void fetchCount();
+    }
+    window.addEventListener(PENDIENTES_REVISION_REFRESH_EVENT, onRefresh);
+
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      window.removeEventListener(PENDIENTES_REVISION_REFRESH_EVENT, onRefresh);
     };
-  }, []);
+  }, [fetchCount]);
 
   const tienePendientes = count > 0;
   const Icon = tienePendientes ? AlertTriangle : CircleCheck;
