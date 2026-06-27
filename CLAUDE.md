@@ -45,6 +45,7 @@ WhatsApp Agent (tiempo real, grupo "Piratería de Camiones")
                 ├── /pendientes-revision (form de dropdowns faltantes)
                 ├── /aprobacion (aprobar / descartar / despublicar)
                 ├── /errores-publicacion (reintentar / descartar fallos)
+                ├── /mapa (visualización geográfica Leaflet)
                 │
                 ▼
        Aprobado → enviarAFramer()
@@ -121,6 +122,15 @@ ADMIN_PUBLIC_URL=http://localhost:3001
 SENTRY_DSN=                           # opcional — observability prod
 ADMIN_PASS_BCRYPT=                    # opcional — preferido vs ADMIN_PASS plaintext
 
+# Sprint mapa + rate-limit (2026-06-27)
+NOMINATIM_USER_AGENT=sistema-varone/1.0 (https://pirateriadecamiones.com.ar contacto@xxx)
+GEOCODE_THROTTLE_MS=1100              # ms entre requests Nominatim (TOS >=1000)
+GEOCODE_BATCH_SIZE=50                 # ubicaciones por corrida cron
+RATE_LIMIT_MUTATIONS_PER_MIN=30       # caps rate limit (opcionales, defaults razonables)
+RATE_LIMIT_PUBLISHER_PER_MIN=10
+RATE_LIMIT_LOGIN_PER_15MIN=10
+RATE_LIMIT_INYECCION_PER_MIN=60
+
 # Alertas Telegram (opcional)
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
@@ -188,6 +198,9 @@ docker compose -f docker/docker-compose.yml -p sistema-varone up -d
 | POST | `/api/framer/reintentar-uno/:id` | Reintenta UN reporte en fallo_publicacion |
 | GET | `/api/framer/health` | Proxy al health del publisher (browser + sesión) |
 | POST | `/api/inyectar-mensaje` | Inyección manual de texto (cuando bot WA caído) |
+| GET | `/api/reportes/geo?desde=&hasta=&tipo=&provincia=` | Reportes con coordenadas para mapa |
+| GET | `/api/ubicaciones/stats` | Stats geocoding (total, resueltas, notFound, pendientes) |
+| POST | `/api/ubicaciones/geocodear-batch` | Forzar batch manual Nominatim |
 
 ## Pendientes operativos
 

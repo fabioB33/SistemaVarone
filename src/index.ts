@@ -144,6 +144,14 @@ async function main() {
     await backupWaSession();
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
+  // Sprint mapa (2026-06-27): cron diario de geocoding a las 4:00 AM Argentina
+  // (después del backup). Procesa hasta GEOCODE_BATCH_SIZE ubicaciones nuevas
+  // por corrida, respetando GEOCODE_THROTTLE_MS entre requests (Nominatim TOS).
+  cron.schedule('0 4 * * *', async () => {
+    const { geocodingBatchCron } = await import('./services/geocoder');
+    await geocodingBatchCron();
+  }, { timezone: 'America/Argentina/Buenos_Aires' });
+
   // Cron: chequeos de comportamiento de la IA cada hora.
   // Detecta 4 modos de falla del modo full-auto: silencio sospechoso, spike,
   // pendientes colgados, distribución sospechosa. Cada alerta tiene dedup de

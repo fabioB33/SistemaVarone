@@ -6,6 +6,12 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 import prisma from '../services/prisma';
 import { notificar } from '../services/notificaciones';
+import {
+  mutationsLimiter,
+  publisherLimiter,
+  loginLimiter,
+  inyeccionLimiter,
+} from '../middleware/rate-limit';
 
 // Sesiones activas (token → timestamp de expiración)
 const activeSessions = new Map<string, number>();
@@ -144,7 +150,8 @@ export function startDashboard(port: number = 3000) {
   app.use(express.json());
 
   // Endpoint de login — devuelve token
-  app.post('/api/login', async (req, res) => {
+  // Sprint mapa+rate-limit (2026-06-27): loginLimiter anti-brute-force.
+  app.post('/api/login', loginLimiter, async (req, res) => {
     const { user, pass } = req.body;
     const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim()
       || req.socket.remoteAddress || null;
@@ -438,7 +445,7 @@ export function startDashboard(port: number = 3000) {
   // Útil para demo cuando el bridge de whatsapp-web.js está roto por cambios de WA Web,
   // o para pruebas sin tener que postear en el grupo real.
   // Solo accesible con BACKEND_API_TOKEN — no expuesto al panel público.
-  app.post('/api/inyectar-mensaje', async (req, res) => {
+  app.post('/api/inyectar-mensaje', inyeccionLimiter, async (req, res) => {
     try {
       const texto = String(req.body?.texto || '').trim();
       if (texto.length < 15) {
@@ -455,7 +462,7 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: reintentar Framer manualmente desde el dashboard
-  app.post('/api/framer/reintentar', async (_req, res) => {
+  app.post('/api/framer/reintentar', publisherLimiter, async (_req, res) => {
     try {
       const { reintentarFramerPendientes } = await import('../services/pipeline');
       await reintentarFramerPendientes();
@@ -470,7 +477,7 @@ export function startDashboard(port: number = 3000) {
   // Sprint hardening 13-mejoras (2026-06-27): reintento de UN reporte específico.
   // Útil para los que quedaron en `fallo_publicacion` y Varone quiere reintentar.
   // Resetea framerIntentos a 0 + estado a 'aprobado' antes de invocar enviarAFramer.
-  app.post('/api/framer/reintentar-uno/:id', async (req, res) => {
+  app.post('/api/framer/reintentar-uno/:id', publisherLimiter, async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
@@ -549,6 +556,92 @@ export function startDashboard(port: number = 3000) {
     } catch (error) {
       console.error('[Dashboard] Error contando fallos:', error);
       res.status(500).json({ ok: false, error: 'Error al contar' });
+    }
+  });
+
+  // Sprint mapa (2026-06-27): reportes con coordenadas para el mapa.
+  //
+  // Query params:
+  //  - desde (YYYY-MM-DD, default = hace 30 días)
+  //  - hasta (YYYY-MM-DD, default = hoy)
+  //  - tipo (filtro opcional por tipoIncidente)
+  //  - provincia (filtro opcional)
+  //
+  // Solo retorna reportes que tienen coordenadas resueltas. Los que no, se
+  // ignoran silencioso (el cron diario las completará en algún momento).
+  app.get('/api/reportes/geo', async (req, res) => {
+    try {
+      const desde = req.query.desde
+        ? new Date(String(req.query.desde))
+        : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const hasta = req.query.hasta
+        ? new Date(String(req.query.hasta))
+        : new Date();
+      const tipo = req.query.tipo ? String(req.query.tipo) : null;
+      const provincia = req.query.provincia ? String(req.query.provincia) : null;
+
+      // INNER JOIN garantiza que solo viene reportes con cache hit.
+      const items = await prisma.$queryRaw<Array<{
+        id: number;
+        fecha: string;
+        hora: string | null;
+        ubicacion: string;
+        ruta: string;
+        tipo_incidente: string;
+        gravedad: string | null;
+        descripcion: string;
+        estado: string;
+        lat: number;
+        lng: number;
+      }>>`
+        SELECT
+          r.id, r.fecha, r.hora, r.ubicacion, r.ruta,
+          r.tipo_incidente, r.gravedad, r.descripcion, r.estado,
+          u.lat, u.lng
+        FROM reportes r
+        INNER JOIN ubicaciones_geocoded u ON u.ubicacion = r.ubicacion
+        WHERE u.not_found = false
+          AND u.lat IS NOT NULL
+          AND u.lng IS NOT NULL
+          AND r.creado_en >= ${desde}
+          AND r.creado_en <= ${hasta}
+          AND (${tipo}::text IS NULL OR r.tipo_incidente = ${tipo})
+          AND (${provincia}::text IS NULL OR r.provincia = ${provincia})
+          AND r.estado IN ('aprobado', 'publicado')
+        ORDER BY r.creado_en DESC
+        LIMIT 500
+      `;
+
+      res.json({ ok: true, count: items.length, items });
+    } catch (error) {
+      console.error('[Dashboard] Error en /api/reportes/geo:', error);
+      res.status(500).json({ ok: false, error: 'Error al cargar reportes geo' });
+    }
+  });
+
+  // Sprint mapa (2026-06-27): stats del geocoding para el panel.
+  app.get('/api/ubicaciones/stats', async (_req, res) => {
+    try {
+      const { statsGeocoding } = await import('../services/geocoder');
+      const stats = await statsGeocoding();
+      res.json({ ok: true, ...stats });
+    } catch (error) {
+      console.error('[Dashboard] Error en /api/ubicaciones/stats:', error);
+      res.status(500).json({ ok: false, error: 'Error al cargar stats geocoding' });
+    }
+  });
+
+  // Sprint mapa (2026-06-27): forzar batch de geocoding manualmente
+  // (útil después de un import masivo o para testing). Protegido por
+  // mutationsLimiter para no abusar de Nominatim TOS.
+  app.post('/api/ubicaciones/geocodear-batch', mutationsLimiter, async (_req, res) => {
+    try {
+      const { geocodingBatchCron } = await import('../services/geocoder');
+      const result = await geocodingBatchCron();
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      console.error('[Dashboard] Error en batch geocoding:', error);
+      res.status(500).json({ ok: false, error: 'Error al geocodear batch' });
     }
   });
 
@@ -709,7 +802,7 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
-  app.post('/api/aprobacion/aprobar', async (req, res) => {
+  app.post('/api/aprobacion/aprobar', mutationsLimiter, async (req, res) => {
     try {
       const id = parseInt(String(req.body?.id), 10);
       if (!Number.isFinite(id)) {
@@ -727,7 +820,7 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: editar un reporte pendiente antes de aprobarlo
-  app.post('/api/aprobacion/editar', async (req, res) => {
+  app.post('/api/aprobacion/editar', mutationsLimiter, async (req, res) => {
     try {
       const id = parseInt(String(req.body?.id), 10);
       if (!Number.isFinite(id)) {
@@ -752,7 +845,7 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: descartar reporte → nunca llega a Framer
-  app.post('/api/aprobacion/descartar', async (req, res) => {
+  app.post('/api/aprobacion/descartar', mutationsLimiter, async (req, res) => {
     try {
       const id = parseInt(String(req.body?.id), 10);
       if (!Number.isFinite(id)) {
@@ -772,7 +865,7 @@ export function startDashboard(port: number = 3000) {
   // API: despublicar reporte ya publicado/aprobado.
   // Bypass humano para corregir errores de la IA en el modo full-auto:
   // borra el item de Framer, re-publica el sitio, marca el reporte como descartado.
-  app.post('/api/aprobacion/despublicar', async (req, res) => {
+  app.post('/api/aprobacion/despublicar', mutationsLimiter, async (req, res) => {
     try {
       const id = parseInt(String(req.body?.id), 10);
       if (!Number.isFinite(id)) {
@@ -791,7 +884,7 @@ export function startDashboard(port: number = 3000) {
 
   // API: publicar el sitio AHORA (botón manual en dashboard).
   // Cron diario también lo dispara automáticamente.
-  app.post('/api/framer/publicar', async (req, res) => {
+  app.post('/api/framer/publicar', publisherLimiter, async (req, res) => {
     try {
       const { publicarSitio } = await import('../services/framer');
       const { marcarPublicadosTrasPublish } = await import('../services/aprobacion');

@@ -1,12 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { LogOut, Truck } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { LogOut, Truck, Map as MapIcon, Inbox } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { AlertasBadge } from './alertas-badge';
 import { PendientesRevisionBadge } from './pendientes-revision-badge';
 import { ErroresPublicacionBadge } from './errores-publicacion-badge';
 import { PublisherHealthBadge } from './publisher-health-badge';
+
+const NAV_LINKS = [
+  { href: '/aprobacion?estado=pendiente', label: 'Aprobación', icon: Inbox, matchPaths: ['/aprobacion'] },
+  { href: '/mapa', label: 'Mapa', icon: MapIcon, matchPaths: ['/mapa'] },
+];
 
 interface Props {
   user: string;
@@ -14,6 +20,7 @@ interface Props {
 
 export function Topbar({ user }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
 
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -43,6 +50,28 @@ export function Topbar({ user }: Props) {
             </span>
           </div>
         </Link>
+
+        {/* Center nav — Sprint mapa (2026-06-27) */}
+        <nav className="hidden items-center gap-1 md:flex">
+          {NAV_LINKS.map(({ href, label, icon: Icon, matchPaths }) => {
+            const isActive = matchPaths.some((p) => pathname?.startsWith(p));
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                  isActive
+                    ? 'bg-accent/10 text-accent'
+                    : 'text-fg-muted hover:bg-subtle/60 hover:text-fg',
+                )}
+              >
+                <Icon className="size-3.5" />
+                {label}
+              </Link>
+            );
+          })}
+        </nav>
 
         {/* Right cluster */}
         <div className="flex items-center gap-3">

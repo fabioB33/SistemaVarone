@@ -46,6 +46,24 @@ export const ENV = {
   // Si vacío, lib/sentry.ts queda idle (no-op).
   SENTRY_DSN: process.env.SENTRY_DSN || '',
 
+  // Sprint mapa + rate-limit (2026-06-27): caps configurables vía env.
+  // Si no se setean, defaults razonables del middleware aplican.
+  RATE_LIMIT_MUTATIONS_PER_MIN: parseInt(process.env.RATE_LIMIT_MUTATIONS_PER_MIN || '', 10) || 0,
+  RATE_LIMIT_PUBLISHER_PER_MIN: parseInt(process.env.RATE_LIMIT_PUBLISHER_PER_MIN || '', 10) || 0,
+  RATE_LIMIT_LOGIN_PER_15MIN: parseInt(process.env.RATE_LIMIT_LOGIN_PER_15MIN || '', 10) || 0,
+  RATE_LIMIT_INYECCION_PER_MIN: parseInt(process.env.RATE_LIMIT_INYECCION_PER_MIN || '', 10) || 0,
+  RATE_LIMIT_PUBLIC_PER_MIN: parseInt(process.env.RATE_LIMIT_PUBLIC_PER_MIN || '', 10) || 0,
+
+  // Sprint mapa (2026-06-27): geocoding config.
+  // Nominatim oficial es free pero requiere User-Agent identificable y
+  // throttle 1 req/seg. Self-host con docker si necesitás más volumen.
+  NOMINATIM_BASE_URL: process.env.NOMINATIM_BASE_URL || 'https://nominatim.openstreetmap.org',
+  NOMINATIM_USER_AGENT: process.env.NOMINATIM_USER_AGENT || 'sistema-varone/1.0 (https://pirateriadecamiones.com.ar)',
+  // ms entre requests a Nominatim. TOS pide >= 1000.
+  GEOCODE_THROTTLE_MS: parseInt(process.env.GEOCODE_THROTTLE_MS || '', 10) || 1100,
+  // Cuántas ubicaciones nuevas geocodear por corrida del cron.
+  GEOCODE_BATCH_SIZE: parseInt(process.env.GEOCODE_BATCH_SIZE || '', 10) || 50,
+
   // General
   NODE_ENV: process.env.NODE_ENV || 'development',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',

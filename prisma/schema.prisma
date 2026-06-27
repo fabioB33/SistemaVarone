@@ -174,3 +174,37 @@ model Alerta {
   @@index([tipo])         // filtros por tipo
   @@index([creadoEn])     // ordenamiento descendente por fecha
 }
+
+// Sprint mapa (2026-06-27): cache de geocoding ubicación → coordenadas.
+//
+// Sin esto, cada renderizado del mapa pegaría 100+ requests a Nominatim,
+// rompiendo el TOS (1 req/seg) + lentitud horrible. Acá guardamos el resultado
+// del primer geocoding y reusamos. El cron diario completa los huecos.
+//
+// La key es `ubicacion` (texto crudo del reporte) — si Varone reporta "Acceso
+// Sudeste km 12" y "Acceso Sudeste KM 12", quedan como 2 rows distintas. Es
+// trade-off consciente: normalizar agresivo perdería precisión semántica.
+//
+// `provider` permite mezclar fuentes en el futuro (Mapbox, Google) sin
+// invalidar todo el cache.
+//
+// `notFound` marca ubicaciones que Nominatim no pudo resolver — así no
+// re-intentamos cada hora. Si vale la pena, Varone las puede editar manual.
+model UbicacionGeocoded {
+  id          Int      @id @default(autoincrement())
+  ubicacion   String   @unique
+  // Coordenadas. Null si notFound=true.
+  lat         Float?
+  lng         Float?
+  // Display name que retornó el geocoder (audit / debugging).
+  displayName String?  @map("display_name")
+  // 'nominatim' | 'mapbox' | 'manual' | ...
+  provider    String   @default("nominatim")
+  // Si el geocoder no resolvió, true. Evita re-intentos infinitos.
+  notFound    Boolean  @default(false) @map("not_found")
+  geocodedEn  DateTime @default(now()) @map("geocoded_en")
+
+  @@map("ubicaciones_geocoded")
+  @@index([notFound])
+  @@index([provider])
+}

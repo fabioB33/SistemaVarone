@@ -156,6 +156,71 @@ export async function reintentarUnReporte(id: number): Promise<{ ok: boolean; er
   });
 }
 
+/**
+ * Sprint mapa (2026-06-27): reporte con coordenadas para el mapa Leaflet.
+ */
+export interface ReporteGeoItem {
+  id: number;
+  fecha: string;
+  hora: string | null;
+  ubicacion: string;
+  ruta: string;
+  tipo_incidente: string;
+  gravedad: string | null;
+  descripcion: string;
+  estado: string;
+  lat: number;
+  lng: number;
+}
+
+export interface ReportesGeoFiltros {
+  desde?: string;
+  hasta?: string;
+  tipo?: string;
+  provincia?: string;
+}
+
+export async function listarReportesGeo(
+  filtros: ReportesGeoFiltros = {},
+): Promise<ReporteGeoItem[]> {
+  const params = new URLSearchParams();
+  if (filtros.desde) params.set('desde', filtros.desde);
+  if (filtros.hasta) params.set('hasta', filtros.hasta);
+  if (filtros.tipo) params.set('tipo', filtros.tipo);
+  if (filtros.provincia) params.set('provincia', filtros.provincia);
+  const qs = params.toString();
+  const r = await backendFetch<ReporteGeoItem[]>(
+    `/api/reportes/geo${qs ? '?' + qs : ''}`,
+  );
+  return r.items || [];
+}
+
+export interface GeocodingStats {
+  total: number;
+  resueltas: number;
+  notFound: number;
+  pendientes: number;
+}
+
+export async function obtenerStatsGeocoding(): Promise<GeocodingStats | null> {
+  const r = await backendFetch<unknown>('/api/ubicaciones/stats');
+  if (!r.ok) return null;
+  const raw = r as unknown as GeocodingStats;
+  return {
+    total: raw.total ?? 0,
+    resueltas: raw.resueltas ?? 0,
+    notFound: raw.notFound ?? 0,
+    pendientes: raw.pendientes ?? 0,
+  };
+}
+
+export async function dispararGeocodingBatch(): Promise<{ ok: boolean; procesadas?: number; nuevas?: number; fallidas?: number; error?: string }> {
+  return backendFetch('/api/ubicaciones/geocodear-batch', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 export async function aprobarReporte(
   id: number,
   aprobadoPor: string,
