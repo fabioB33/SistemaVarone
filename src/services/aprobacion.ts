@@ -120,6 +120,23 @@ export async function aprobar(
     return { ok: false, error: `Reporte ya está en estado ${r.estado}` };
   }
 
+  // Sprint flow-unificado-aprobacion (2026-06-28): bloqueo defensivo en
+  // backend. El frontend deshabilita el botón "Aprobar" cuando hay
+  // faltantes, pero un actor (o script) podría pegar directo al endpoint.
+  // Cubrimos servidor-side para no publicar reportes incompletos en el
+  // formulario público.
+  if (r.camposFaltantes && r.camposFaltantes.length > 0) {
+    void registrarAccion({
+      evento: 'aprobar.fail.campos-faltantes', actor: aprobadoPor, origen, reporteId: id,
+      ip: ctx.ip, userAgent: ctx.userAgent,
+      meta: { camposFaltantes: r.camposFaltantes },
+    });
+    return {
+      ok: false,
+      error: `No se puede aprobar: faltan ${r.camposFaltantes.length} dropdown(s) del formulario público (${r.camposFaltantes.join(', ')}). Completá los campos en amber antes de aprobar.`,
+    };
+  }
+
   const reporte: ReporteIncidente = {
     fecha: r.fecha,
     hora: r.hora ?? 'desconocida',
@@ -347,12 +364,15 @@ function normalize(
 /**
  * Edita un reporte pendiente antes de aprobarlo.
  *
- * Sprint pivot-framer-form (2026-06-26): se permite también editar reportes
- * en estado 'pendiente_revision'. Si el editor completa los 10 campos del
- * formulario público, recalculamos `camposFaltantes` y transicionamos
- * automáticamente a 'pendiente' (listo para aprobación).
+ * Sprint pivot-framer-form (2026-06-26) + flow-unificado-aprobacion
+ * (2026-06-28): SOLO 'pendiente' editable. Antes había un estado dedicado
+ * 'pendiente_revision' para reportes con dropdowns ambiguos, ahora todos
+ * arrancan en 'pendiente' y los faltantes se editan inline en la card de
+ * /aprobacion. Si Varone completa todos los dropdowns, `camposFaltantes`
+ * queda vacío y el botón "Aprobar" se habilita.
  *
- * Estados editables: 'pendiente', 'pendiente_revision'.
+ * Estado editable: SOLO 'pendiente'. Reportes legacy en 'pendiente_revision'
+ * son migrados a 'pendiente' por la migration `20260628_*` al deploy.
  */
 export async function editarPendiente(
   id: number,
@@ -369,6 +389,10 @@ export async function editarPendiente(
     });
     return { ok: false, error: 'Reporte no encontrado' };
   }
+  // Sprint flow-unificado-aprobacion (2026-06-28): SOLO 'pendiente' editable.
+  // El estado 'pendiente_revision' quedó obsoleto. Reportes legacy migrados
+  // por SQL al deploy. Lo dejamos en la lista por backwards compat por si
+  // queda alguno en la DB de prod antes de aplicar la migration.
   const estadosEditables = ['pendiente', 'pendiente_revision'];
   if (!estadosEditables.includes(r.estado)) {
     void registrarAccion({

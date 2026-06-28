@@ -274,24 +274,25 @@ async function _procesarTexto(
     incrementarMetrica('reportesRegistrados');
     await verificarSpike();
 
-    // Sprint pivot-framer-form (2026-06-26) — ya NO se auto-publica.
+    // Sprint pivot-framer-form (2026-06-26) + flow-unificado-aprobacion
+    // (2026-06-28) — ya NO se auto-publica.
     //
-    // El sistema queda en modo "review-first":
-    //  - Si la IA extrajo todos los campos del formulario público OK
-    //    → estado='pendiente' (Varone aprueba con 1 click y se publica).
-    //  - Si falta ≥1 dropdown → estado='pendiente_revision' (Varone tiene
-    //    que completar los faltantes manualmente antes de publicar).
+    // Modo "review-first" unificado:
+    //  - TODOS los reportes arrancan en estado='pendiente'.
+    //  - Si la IA extrajo todos los campos OK → `camposFaltantes=[]` →
+    //    Varone aprueba con 1 click y se publica.
+    //  - Si falta ≥1 dropdown → `camposFaltantes=[...]` → la card de
+    //    /aprobacion los muestra inline con select amber, el botón
+    //    "Aprobar" queda disabled hasta que Varone los complete.
     //
-    // El `registrarReporte()` ya setea el estado correcto basado en
-    // `camposFaltantes`. Nada más que hacer acá.
-    //
-    // Notificamos a Varone con el link al panel para que revise.
+    // El `registrarReporte()` ya setea estado='pendiente' siempre. Acá solo
+    // logueamos cuántos faltantes tiene para visibilidad operativa.
     const reporteDb = await prisma.reporte.findUnique({ where: { id: reporteId } });
-    const necesitaRevision = (reporteDb?.camposFaltantes?.length ?? 0) > 0;
+    const cantFaltantes = reporteDb?.camposFaltantes?.length ?? 0;
 
-    if (necesitaRevision) {
+    if (cantFaltantes > 0) {
       logger.warn(
-        `[Pipeline] Reporte #${reporteId} en pendiente_revision — IA no resolvió ${reporteDb!.camposFaltantes.length} dropdowns: ${reporteDb!.camposFaltantes.join(', ')}`,
+        `[Pipeline] Reporte #${reporteId} en pendiente con ${cantFaltantes} dropdowns sin resolver: ${reporteDb!.camposFaltantes.join(', ')}. Varone tiene que completar antes de aprobar.`,
       );
     } else {
       logger.info(
@@ -300,7 +301,7 @@ async function _procesarTexto(
     }
 
     if (waMsgId) emitirEstadoProcesado(waMsgId, true, { gravedad: reporte.gravedad, ubicacion: reporte.ubicacion });
-    console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente}, estado=${necesitaRevision ? 'pendiente_revision' : 'pendiente'})`);
+    console.log(`[Pipeline] Procesado: ${reporte.tipoIncidente} en ${reporte.ubicacion} (${fuente}, estado=pendiente, faltantes=${cantFaltantes})`);
   } catch (error) {
     console.error(`[Pipeline] Error procesando texto (${fuente}):`, error);
   }

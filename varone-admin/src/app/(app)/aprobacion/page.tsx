@@ -56,14 +56,15 @@ export default async function AprobacionPage({
         <div>
           <p className="mb-1.5 inline-flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-fg-muted">
             <Activity className="size-3 text-accent" />
-            Centro de control · IA full-auto
+            Centro de control · Review-first
           </p>
           <h1 className="text-3xl font-semibold tracking-tight text-fg">
-            Reportes auto-publicados por IA
+            Aprobación de reportes
           </h1>
           <p className="mt-1.5 text-sm text-fg-muted">
-            La IA Gemini clasifica los mensajes del grupo y manda a Framer los que pasan los criterios.
-            Si algo se publicó mal, despublicalo desde la pestaña correspondiente.
+            La IA Gemini clasifica los mensajes del grupo y completa el formulario público.
+            Si quedaron dropdowns ambiguos (amber), completalos y aprobá.
+            Si todo está OK, click directo en "Aprobar y publicar".
           </p>
         </div>
         <PublicarSitioButton pendientesPublicar={counts.aprobado} />
@@ -73,7 +74,7 @@ export default async function AprobacionPage({
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Kpi
           icon={Inbox}
-          label="Reintentando"
+          label="Pendientes"
           value={counts.pendiente}
           accent={counts.pendiente > 0 ? 'warn' : 'muted'}
         />
@@ -161,13 +162,13 @@ function EmptyState({ estado }: { estado: Estado }) {
   const config: Record<Estado, { icon: React.ComponentType<{ className?: string }>; title: string; desc: string }> = {
     pendiente: {
       icon: Inbox,
-      title: 'Sin reintentos pendientes',
-      desc: 'Todos los reportes recientes pasaron la IA y se enviaron a Framer sin errores.',
+      title: 'No hay reportes pendientes',
+      desc: 'Cuando llegue un mensaje al grupo de WhatsApp, la IA lo clasifica y aparece acá para que lo revises y apruebes.',
     },
     aprobado: {
       icon: CheckCircle2,
       title: 'Sin reportes esperando publicación',
-      desc: 'Cuando la IA apruebe nuevos reportes aparecen acá hasta que el cron publique el sitio (9 AM y 21 hs Argentina).',
+      desc: 'Los reportes aprobados se publican automáticamente al sitio público vía Playwright. Si quedan acá es porque el publisher tardó o falló (mirá la pestaña errores).',
     },
     publicado: {
       icon: Globe,

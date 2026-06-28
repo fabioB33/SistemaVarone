@@ -26,12 +26,19 @@ export async function existeDuplicado(texto: string, urlNoticia?: string): Promi
 export async function registrarReporte(texto: string, datos: Record<string, unknown>): Promise<number> {
   const hash = generarHash(texto);
 
-  // Sprint pivot-framer-form (2026-06-26):
+  // Sprint pivot-framer-form (2026-06-26) + flow-unificado-aprobacion
+  // (2026-06-28):
+  //
   // Aplica fuzzy match a los 10 campos del formulario Framer. Si el matcher
-  // no resuelve alguno, queda null y se agrega a `camposFaltantes`. Si la
-  // lista tiene >0 entries, el reporte arranca en `pendiente_revision` y
-  // Varone tiene que completarlo manualmente desde el dashboard antes de
-  // que se publique en pirateriadecamiones.com.ar/formulario-de-incidentes.
+  // no resuelve alguno, queda null y se agrega a `camposFaltantes`.
+  //
+  // TODOS los reportes arrancan en estado='pendiente' (no más
+  // 'pendiente_revision' como estado separado). La lista `camposFaltantes`
+  // queda como marca visual en la card de /aprobacion: Varone ve los
+  // dropdowns en amber con select inline y el botón "Aprobar" queda
+  // disabled si la lista no está vacía. UNA SOLA cola pendiente, una sola
+  // acción. Antes había 2 estados + 2 páginas + 2 badges — Fabio pidió
+  // unificar.
   const framer = resolverCamposFramer({
     provincia: datos.provincia as string | null | undefined,
     tipoIncidenteFramer: datos.tipoIncidenteFramer as string | null | undefined,
@@ -45,7 +52,9 @@ export async function registrarReporte(texto: string, datos: Record<string, unkn
     cantidadPersonasInvolucradas: datos.cantidadPersonasInvolucradas as string | null | undefined,
   });
 
-  const estado = framer.camposFaltantes.length > 0 ? 'pendiente_revision' : 'pendiente';
+  // Sprint flow-unificado-aprobacion (2026-06-28): siempre 'pendiente'.
+  // Los `camposFaltantes` viajan inline en la card de /aprobacion.
+  const estado = 'pendiente';
 
   const reporte = await prisma.reporte.create({
     data: {

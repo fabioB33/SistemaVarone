@@ -45,6 +45,27 @@ export async function editarAction(id: number, cambios: ReporteEditableFields) {
   return result;
 }
 
+/**
+ * Sprint flow-unificado-aprobacion (2026-06-28): completar dropdowns
+ * faltantes inline desde la card de /aprobacion.
+ *
+ * El backend recalcula `camposFaltantes` post-edit. Si todos los
+ * dropdowns obligatorios quedan completos, el array queda vacío y el
+ * botón "Aprobar" se habilita en el siguiente render.
+ *
+ * Misma firma que la action vieja de /pendientes-revision (que se elimina
+ * en este sprint) para preservar el behavior.
+ */
+export async function completarCamposFramerAction(
+  id: number,
+  cambios: ReporteEditableFields,
+) {
+  const user = await requireUser();
+  const result = await editarReporteBackend(id, cambios, user);
+  revalidatePath('/aprobacion');
+  return result;
+}
+
 export async function publicarSitioAction() {
   await requireUser();
   const result = await publicarSitioFramer();

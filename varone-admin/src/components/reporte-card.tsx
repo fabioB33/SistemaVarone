@@ -13,6 +13,7 @@ import { type ReporteListItem } from '@/lib/backend';
 import { formatDate, cn } from '@/lib/utils';
 import { AprobarButton, DescartarButton, DespublicarButton } from './accion-buttons';
 import { EditarReporteDialog } from './editar-reporte-dialog';
+import { CamposFramerInline } from './campos-framer-inline';
 
 interface Props {
   reporte: ReporteListItem;
@@ -106,20 +107,34 @@ export function ReporteCard({ reporte, showActions = false }: Props) {
           <p className="mt-3 max-w-prose text-sm leading-relaxed text-fg-secondary">
             {reporte.descripcion}
           </p>
+
+          {/* Sprint flow-unificado-aprobacion (2026-06-28): bloque inline
+              con los 10 campos canonical del form Framer. Los faltantes
+              salen en amber con select inline. Cuando se completan, el
+              botón "Aprobar" se habilita (ver lógica en disabledReason). */}
+          {reporte.estado === 'pendiente' && (
+            <CamposFramerInline reporte={reporte} />
+          )}
         </div>
 
         {/* Acciones */}
-        {showActions && reporte.estado === 'pendiente' && (
-          // Estado pendiente solo aparece si Framer falló en el primer envío
-          // del flujo auto. El cron retry lo levanta solo cada 15min.
-          // Igual mostramos Aprobar/Editar/Descartar manuales por si Varone
-          // quiere intervenir mientras tanto.
-          <div className="flex flex-col gap-2 sm:min-w-[10rem] sm:items-stretch">
-            <AprobarButton id={reporte.id} />
-            <EditarReporteDialog reporte={reporte} />
-            <DescartarButton id={reporte.id} />
-          </div>
-        )}
+        {showActions && reporte.estado === 'pendiente' && (() => {
+          // Sprint flow-unificado-aprobacion (2026-06-28): botón "Aprobar"
+          // queda disabled si hay camposFaltantes (Varone tiene que llenar
+          // los selects amber primero). El backend también bloquea
+          // server-side por defensa en profundidad.
+          const faltantes = reporte.camposFaltantes ?? [];
+          const disabledReason = faltantes.length > 0
+            ? `Faltan ${faltantes.length} dropdown${faltantes.length === 1 ? '' : 's'} (completá los selects en amber arriba)`
+            : null;
+          return (
+            <div className="flex flex-col gap-2 sm:min-w-[10rem] sm:items-stretch">
+              <AprobarButton id={reporte.id} disabledReason={disabledReason} />
+              <EditarReporteDialog reporte={reporte} />
+              <DescartarButton id={reporte.id} />
+            </div>
+          );
+        })()}
         {showActions && (reporte.estado === 'aprobado' || reporte.estado === 'publicado') && (
           // Bypass humano del modo full-auto: si la IA auto-publicó algo mal,
           // Despublicar lo borra de Framer + re-publica el sitio + marca descartado.

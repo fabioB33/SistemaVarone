@@ -5,9 +5,12 @@ import { usePathname, useRouter } from 'next/navigation';
 import { LogOut, Truck, Map as MapIcon, Inbox } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AlertasBadge } from './alertas-badge';
-import { PendientesRevisionBadge } from './pendientes-revision-badge';
 import { ErroresPublicacionBadge } from './errores-publicacion-badge';
 import { PublisherHealthBadge } from './publisher-health-badge';
+
+// Sprint flow-unificado-aprobacion (2026-06-28): PendientesRevisionBadge
+// eliminado. Los campos faltantes ahora viven inline en la card de
+// /aprobacion. Un solo badge de acción humana = "Aprobación".
 
 const NAV_LINKS = [
   { href: '/aprobacion?estado=pendiente', label: 'Aprobación', icon: Inbox, matchPaths: ['/aprobacion'] },
@@ -77,7 +80,6 @@ export function Topbar({ user }: Props) {
         <div className="flex items-center gap-3">
           <PublisherHealthBadge />
           <ErroresPublicacionBadge />
-          <PendientesRevisionBadge />
           <AlertasBadge />
           <div className="hidden items-center gap-2 rounded-full border border-line bg-surface/60 px-3 py-1.5 text-xs sm:flex">
             <span className="text-fg-muted">Sesión</span>

@@ -12,10 +12,18 @@ import {
 import { cn } from '@/lib/utils';
 import { ConfirmDialog } from './confirm-dialog';
 
-export function AprobarButton({ id }: { id: number }) {
+/**
+ * Sprint flow-unificado-aprobacion (2026-06-28): nuevo prop `disabledReason`.
+ * Si está seteado, el botón "Aprobar" queda disabled + muestra tooltip
+ * + leyenda chiquita debajo. Pattern: Varone NO puede aprobar reportes
+ * con `camposFaltantes > 0` hasta completar los dropdowns en amber.
+ */
+export function AprobarButton({ id, disabledReason }: { id: number; disabledReason?: string | null }) {
   const router = useRouter();
   const [isPending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
+
+  const isDisabled = isPending || !!disabledReason;
 
   return (
     <div className="flex flex-col items-stretch gap-1">
@@ -28,13 +36,19 @@ export function AprobarButton({ id }: { id: number }) {
             else router.refresh();
           })
         }
-        disabled={isPending}
+        disabled={isDisabled}
+        title={disabledReason ?? undefined}
         className="vc-btn vc-btn-success vc-btn-sm"
         aria-label="Aprobar reporte"
       >
         {isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-        Aprobar
+        Aprobar y publicar
       </button>
+      {disabledReason && (
+        <span className="flex items-center gap-1 text-2xs text-warn">
+          <AlertCircle className="size-3" /> {disabledReason}
+        </span>
+      )}
       {err && (
         <span className="flex items-center gap-1 text-2xs text-danger">
           <AlertCircle className="size-3" /> {err}
