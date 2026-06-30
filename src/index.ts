@@ -152,6 +152,43 @@ async function main() {
     await geocodingBatchCron();
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
+  // Sprint scrapers-portales (2026-06-30): cron por portal (default cada 15h
+  // override por env var por portal — regla #9 NO-HARDCODED).
+  // Si DISABLE_SCRAPERS=1, los crons no se registran (dev / smoke / si rompen).
+  if (ENV.DISABLE_SCRAPERS !== '1') {
+    const portalCronEntries: Array<{ portal: string; schedule: string }> = [
+      { portal: 'cronica',         schedule: ENV.PORTAL_CRONICA_CRON },
+      { portal: 'diario-popular',  schedule: ENV.PORTAL_DIARIO_POPULAR_CRON },
+      { portal: 'infobae',         schedule: ENV.PORTAL_INFOBAE_CRON },
+      { portal: 'la-nacion',       schedule: ENV.PORTAL_LA_NACION_CRON },
+      { portal: 'clarin',          schedule: ENV.PORTAL_CLARIN_CRON },
+      { portal: 'pagina12',        schedule: ENV.PORTAL_PAGINA12_CRON },
+    ];
+    for (const { portal, schedule } of portalCronEntries) {
+      cron.schedule(schedule, async () => {
+        try {
+          const { correrScraperUno } = await import('./agents/portales');
+          await correrScraperUno(portal);
+        } catch (err) {
+          logger.error(`[Cron portal ${portal}] ${err instanceof Error ? err.message : err}`);
+        }
+      }, { timezone: 'America/Argentina/Buenos_Aires' });
+    }
+    logger.info(`[Cron] ${portalCronEntries.length} scrapers registrados`);
+
+    // Healthcheck portales: cron diario 10 AM Argentina.
+    cron.schedule('0 10 * * *', async () => {
+      try {
+        const { chequearSaludPortales } = await import('./services/portales-healthcheck');
+        await chequearSaludPortales();
+      } catch (err) {
+        logger.error(`[Cron portales-healthcheck] ${err instanceof Error ? err.message : err}`);
+      }
+    }, { timezone: 'America/Argentina/Buenos_Aires' });
+  } else {
+    logger.info('[Cron] Scrapers de portales DESHABILITADOS via DISABLE_SCRAPERS=1');
+  }
+
   // Cron: chequeos de comportamiento de la IA cada hora.
   // Detecta 4 modos de falla del modo full-auto: silencio sospechoso, spike,
   // pendientes colgados, distribución sospechosa. Cada alerta tiene dedup de

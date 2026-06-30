@@ -15,6 +15,19 @@ import { AprobarButton, DescartarButton, DespublicarButton } from './accion-butt
 import { EditarReporteDialog } from './editar-reporte-dialog';
 import { CamposFramerInline } from './campos-framer-inline';
 
+// Sprint scrapers-portales (2026-06-30): labels human-friendly por portal.
+const PORTAL_LABELS: Record<string, string> = {
+  'cronica': 'Crónica',
+  'diario-popular': 'Diario Popular',
+  'infobae': 'Infobae',
+  'la-nacion': 'La Nación',
+  'clarin': 'Clarín',
+  'pagina12': 'Página 12',
+};
+function portalLabel(p: string): string {
+  return PORTAL_LABELS[p] || p;
+}
+
 interface Props {
   reporte: ReporteListItem;
   showActions?: boolean;
@@ -99,7 +112,13 @@ export function ReporteCard({ reporte, showActions = false }: Props) {
             </span>
             <span className="inline-flex items-center gap-1.5">
               <FuenteIcon className="size-3" />
-              {reporte.fuente === 'whatsapp' ? 'WhatsApp' : 'Web'}
+              {/* Sprint scrapers-portales (2026-06-30): si es scraping, mostrar
+                  el nombre del portal en lugar de "Web" genérico. */}
+              {reporte.fuente === 'whatsapp'
+                ? 'WhatsApp'
+                : reporte.portalOrigen
+                  ? portalLabel(reporte.portalOrigen)
+                  : 'Web'}
             </span>
           </div>
 

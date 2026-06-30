@@ -64,6 +64,32 @@ export const ENV = {
   // Cuántas ubicaciones nuevas geocodear por corrida del cron.
   GEOCODE_BATCH_SIZE: parseInt(process.env.GEOCODE_BATCH_SIZE || '', 10) || 50,
 
+  // Sprint scrapers-portales (2026-06-30):
+  // Pre-filtro extensible vía env vars (regla #9 NO-HARDCODED).
+  // Lista separada por comas: 'extra1,extra2,extra3'.
+  PREFILTRO_WHITELIST_EXTRA: process.env.PREFILTRO_WHITELIST_EXTRA || '',
+  PREFILTRO_BLACKLIST_EXTRA: process.env.PREFILTRO_BLACKLIST_EXTRA || '',
+
+  // Cron expressions por portal. Default: cada 15h.
+  // Override por portal si Varone quiere distinta cadencia.
+  PORTAL_CRONICA_CRON:        process.env.PORTAL_CRONICA_CRON        || '0 */15 * * *',
+  PORTAL_DIARIO_POPULAR_CRON: process.env.PORTAL_DIARIO_POPULAR_CRON || '0 */15 * * *',
+  PORTAL_INFOBAE_CRON:        process.env.PORTAL_INFOBAE_CRON        || '0 */15 * * *',
+  PORTAL_LA_NACION_CRON:      process.env.PORTAL_LA_NACION_CRON      || '0 */15 * * *',
+  PORTAL_CLARIN_CRON:         process.env.PORTAL_CLARIN_CRON         || '0 */15 * * *',
+  PORTAL_PAGINA12_CRON:       process.env.PORTAL_PAGINA12_CRON       || '0 */15 * * *',
+
+  // Toggle global para desactivar scrapers (smoke / dev / si los portales rompen).
+  DISABLE_SCRAPERS: process.env.DISABLE_SCRAPERS || '',
+
+  // User-Agent identificable que mandamos en los requests al portal (cortesía
+  // + permite que el portal nos contacte si abusamos).
+  SCRAPER_USER_AGENT: process.env.SCRAPER_USER_AGENT
+    || 'sistema-varone/1.0 (https://pirateriadecamiones.com.ar contacto@xxx)',
+
+  // Máximo de notas por scrape, por portal (defensivo).
+  SCRAPER_MAX_NOTAS_POR_PORTAL: parseInt(process.env.SCRAPER_MAX_NOTAS_POR_PORTAL || '20', 10),
+
   // General
   NODE_ENV: process.env.NODE_ENV || 'development',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',

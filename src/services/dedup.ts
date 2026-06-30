@@ -76,6 +76,9 @@ export async function registrarReporte(texto: string, datos: Record<string, unkn
       framerEnviado: false,
       framerIntentos: 0,
       portalOrigen: (datos.portalOrigen as string) || null,
+      // Sprint scrapers-portales (2026-06-30): metadata del scraping si fuente='scraping'.
+      tituloOriginal: (datos.tituloOriginal as string) || null,
+      publishedAt: (datos.publishedAt as Date | null) || null,
 
       // Campos del form Framer
       provincia: framer.provincia,

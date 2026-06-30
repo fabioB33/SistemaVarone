@@ -44,6 +44,28 @@ export interface ReporteListItem {
   cantidadVehiculosInvolucrados: string | null;
   cantidadPersonasInvolucradas: string | null;
   camposFaltantes: string[];
+
+  // Sprint scrapers-portales (2026-06-30): metadata del scraping si fuente='scraping'.
+  portalOrigen: string | null;
+  tituloOriginal: string | null;
+  publishedAt: string | null;
+}
+
+// Sprint scrapers-portales (2026-06-30)
+export interface ScrapeDescartadoItem {
+  id: number;
+  portal: string;
+  url: string | null;
+  titulo: string;
+  resumen: string | null;
+  razon: 'blacklist' | 'sin-keywords';
+  matchedKeywords: string[];
+  descartadoEn: string;
+}
+
+export interface DescartadosCount {
+  total: number;
+  porPortal: Array<{ portal: string; _count: number }>;
 }
 
 interface BackendResponse<T> {
@@ -353,4 +375,41 @@ export async function obtenerWaStatus(): Promise<WaStatus | null> {
   } catch {
     return null;
   }
+}
+
+// ─── Sprint scrapers-portales (2026-06-30) ──────────────────────────────────
+
+export async function listarDescartados(opts?: {
+  portal?: string;
+  razon?: 'blacklist' | 'sin-keywords';
+  limit?: number;
+}): Promise<ScrapeDescartadoItem[]> {
+  const params = new URLSearchParams();
+  if (opts?.portal) params.set('portal', opts.portal);
+  if (opts?.razon) params.set('razon', opts.razon);
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  const r = await backendFetch<ScrapeDescartadoItem[]>(`/api/descartados/lista?${params.toString()}`);
+  return r.items || [];
+}
+
+export async function contarDescartados(): Promise<DescartadosCount> {
+  const r = await backendFetch<unknown>('/api/descartados/count');
+  return (r as unknown as DescartadosCount) || { total: 0, porPortal: [] };
+}
+
+export async function correrScraperManual(portal: string): Promise<{
+  ok: boolean;
+  error?: string;
+  portal?: string;
+  notasScrapeadas?: number;
+  pasaronPrefiltro?: number;
+  descartadosBlacklist?: number;
+  descartadosSinKeywords?: number;
+  enviadosAlPipeline?: number;
+  duracionMs?: number;
+}> {
+  return backendFetch(`/api/scrapers/correr/${encodeURIComponent(portal)}`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
 }

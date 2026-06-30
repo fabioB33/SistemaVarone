@@ -65,7 +65,17 @@ const PIPELINE_TIMEOUT_MS = 30_000;
 const URL_FETCH_TIMEOUT_MS = 10_000;
 
 // Cola FIFO para procesar mensajes de a uno — evita rate limit cuando llegan ráfagas
-type ColaItem = { texto: string; fuente: 'whatsapp'; urlNoticia?: string; portalOrigen?: string; waMsgId?: string };
+// Sprint scrapers-portales (2026-06-30): fuente acepta 'scraping' + metadata
+// del portal (tituloOriginal + publishedAt).
+type ColaItem = {
+  texto: string;
+  fuente: 'whatsapp' | 'scraping';
+  urlNoticia?: string;
+  portalOrigen?: string;
+  tituloOriginal?: string;
+  publishedAt?: Date | null;
+  waMsgId?: string;
+};
 const cola: ColaItem[] = [];
 let colaCorreindo = false;
 
@@ -74,8 +84,15 @@ async function procesarCola(): Promise<void> {
   colaCorreindo = true;
   while (cola.length > 0) {
     const item = cola.shift()!;
-    await _procesarTexto(item.texto, item.fuente, item.urlNoticia, item.portalOrigen, item.waMsgId)
-      .catch(err => logger.error('[Pipeline] Error en item de cola:', err));
+    await _procesarTexto(
+      item.texto,
+      item.fuente,
+      item.urlNoticia,
+      item.portalOrigen,
+      item.waMsgId,
+      item.tituloOriginal,
+      item.publishedAt,
+    ).catch(err => logger.error('[Pipeline] Error en item de cola:', err));
   }
   colaCorreindo = false;
 }
@@ -201,26 +218,66 @@ function conTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<
 /**
  * Encola el texto para procesamiento secuencial.
  * Evita lanzar N llamadas a la IA en paralelo cuando llegan ráfagas de mensajes.
+ *
+ * Sprint scrapers-portales (2026-06-30): overload para soportar tanto
+ * llamadas viejas (whatsapp con args posicionales) como nuevas (scraping con
+ * opts object). Backwards compat 100%.
  */
 export function procesarTexto(
   texto: string,
   fuente: 'whatsapp',
   urlNoticia?: string,
   portalOrigen?: string,
-  waMsgId?: string
+  waMsgId?: string,
+): void;
+export function procesarTexto(
+  texto: string,
+  fuente: 'scraping',
+  opts: { urlNoticia?: string; portalOrigen?: string; tituloOriginal?: string; publishedAt?: Date | null },
+): void;
+export function procesarTexto(
+  texto: string,
+  fuente: 'whatsapp' | 'scraping',
+  optsOrUrl?: string | { urlNoticia?: string; portalOrigen?: string; tituloOriginal?: string; publishedAt?: Date | null },
+  portalOrigen?: string,
+  waMsgId?: string,
 ): void {
   if (texto.trim().length < 15) return;
-  cola.push({ texto, fuente, urlNoticia, portalOrigen, waMsgId });
+
+  // Sprint scrapers-portales: si fuente=scraping, optsOrUrl es el objeto opts.
+  let item: ColaItem;
+  if (fuente === 'scraping' && typeof optsOrUrl === 'object' && optsOrUrl !== null) {
+    item = {
+      texto,
+      fuente: 'scraping',
+      urlNoticia: optsOrUrl.urlNoticia,
+      portalOrigen: optsOrUrl.portalOrigen,
+      tituloOriginal: optsOrUrl.tituloOriginal,
+      publishedAt: optsOrUrl.publishedAt,
+    };
+  } else {
+    // Path legacy whatsapp
+    item = {
+      texto,
+      fuente: 'whatsapp',
+      urlNoticia: typeof optsOrUrl === 'string' ? optsOrUrl : undefined,
+      portalOrigen,
+      waMsgId,
+    };
+  }
+  cola.push(item);
   logger.info(`[Pipeline] Encolado (cola: ${cola.length}). Fuente: ${fuente}`);
   procesarCola();
 }
 
 async function _procesarTexto(
   texto: string,
-  fuente: 'whatsapp',
+  fuente: 'whatsapp' | 'scraping',
   urlNoticia?: string,
   portalOrigen?: string,
-  waMsgId?: string
+  waMsgId?: string,
+  tituloOriginal?: string,
+  publishedAt?: Date | null,
 ): Promise<void> {
   try {
     incrementarMetrica('textosTotales');
@@ -262,14 +319,21 @@ async function _procesarTexto(
     }
 
     const reporte = resultado.reporte;
-    reporte.fuente = fuente;
-    reporte.textoOriginal = texto;
-    if (urlNoticia) reporte.urlNoticia = urlNoticia;
-    if (portalOrigen) reporte.portalOrigen = portalOrigen;
+    // Sprint scrapers-portales (2026-06-30): el tipo histórico de ReporteIncidente
+    // estipula fuente='whatsapp'. Ahora puede ser 'scraping' también. Cast
+    // explícito vía Record<string,unknown> (intermedio) para evitar el strict
+    // assignability check y dejar el dato fluyendo a registrarReporte().
+    const reporteRecord = reporte as unknown as Record<string, unknown>;
+    reporteRecord.fuente = fuente;
+    reporteRecord.textoOriginal = texto;
+    if (urlNoticia) reporteRecord.urlNoticia = urlNoticia;
+    if (portalOrigen) reporteRecord.portalOrigen = portalOrigen;
+    if (tituloOriginal) reporteRecord.tituloOriginal = tituloOriginal;
+    if (publishedAt) reporteRecord.publishedAt = publishedAt;
 
     // Registrar en DB. El default del schema es estado='pendiente'; lo
     // transicionamos a 'aprobado' después si el envío a Framer tiene éxito.
-    const datosReporte: Record<string, unknown> = { ...reporte };
+    const datosReporte: Record<string, unknown> = { ...reporteRecord };
     const reporteId = await registrarReporte(texto, datosReporte);
     incrementarMetrica('reportesRegistrados');
     await verificarSpike();

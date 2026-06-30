@@ -27,6 +27,9 @@ model Reporte {
   framerEnviado  Boolean  @default(false) @map("framer_enviado")
   framerIntentos Int      @default(0) @map("framer_intentos")
   portalOrigen   String?  @map("portal_origen")  // nombre del portal si fuente=scraping
+  // Sprint scrapers-portales (2026-06-30): metadata del scraping.
+  tituloOriginal String?  @map("titulo_original")  // titular tal cual en el portal
+  publishedAt    DateTime? @map("published_at")    // fecha de publicación del portal (no de scraping)
   creadoEn       DateTime @default(now()) @map("creado_en")
 
   // Sprint pivot-framer-form (2026-06-26) — Campos del formulario público
@@ -207,4 +210,35 @@ model UbicacionGeocoded {
   @@map("ubicaciones_geocoded")
   @@index([notFound])
   @@index([provider])
+}
+
+// Sprint scrapers-portales (2026-06-30) — auditoría de descartes del pre-filtro.
+//
+// Cada nota que un scraper trae pasa por `prefiltro.ts`. Si la nota:
+//  - matchea blacklist (narco / droga / etc.) → razon='blacklist'
+//  - no matchea ninguna whitelist             → razon='sin-keywords'
+//  - matchea whitelist sin blacklist          → pasa al pipeline IA
+//
+// Esta tabla guarda los DESCARTES con TTL 14 días (cron limpieza). Sirve para:
+//  1. Auditar las keywords del pre-filtro ("¿estoy tirando algo que sí era?")
+//  2. Tunear whitelist/blacklist con data real las primeras semanas
+//  3. Ver desde el admin /descartados los últimos N
+//
+// NO guardamos descartes de la IA (`esRelevante: false`) — ese es otro mecanismo
+// upstream del pipeline existente que no toca esta tabla.
+model ScrapeDescartado {
+  id            Int      @id @default(autoincrement())
+  portal        String   // 'clarin' | 'cronica' | etc.
+  url           String?  // URL de la nota original
+  titulo        String   // titular
+  resumen       String?  // primer párrafo si lo extrajimos
+  razon         String   // 'blacklist' | 'sin-keywords'
+  matchedKeywords String[] @map("matched_keywords") @default([])
+  descartadoEn  DateTime @default(now()) @map("descartado_en")
+
+  @@map("scrapes_descartados")
+  @@index([portal])
+  @@index([razon])
+  @@index([descartadoEn])
+  @@unique([portal, url])  // evita duplicar el mismo descarte si el scraper corre 2 veces
 }

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LogOut, Truck, Map as MapIcon, Inbox } from 'lucide-react';
+import { LogOut, Truck, Map as MapIcon, Inbox, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AlertasBadge } from './alertas-badge';
 import { ErroresPublicacionBadge } from './errores-publicacion-badge';
@@ -15,6 +15,8 @@ import { PublisherHealthBadge } from './publisher-health-badge';
 const NAV_LINKS = [
   { href: '/aprobacion?estado=pendiente', label: 'Aprobación', icon: Inbox, matchPaths: ['/aprobacion'] },
   { href: '/mapa', label: 'Mapa', icon: MapIcon, matchPaths: ['/mapa'] },
+  // Sprint scrapers-portales (2026-06-30): auditoría del pre-filtro.
+  { href: '/descartados', label: 'Descartes', icon: Trash2, matchPaths: ['/descartados'] },
 ];
 
 interface Props {

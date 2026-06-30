@@ -559,6 +559,70 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
+  // Sprint scrapers-portales (2026-06-30): listar últimos descartes del pre-filtro.
+  // Útil para auditar y tunear whitelist/blacklist en las primeras semanas.
+  //
+  // Query params:
+  //  - portal: opcional, filtra por nombre canónico ('clarin', 'cronica', ...)
+  //  - razon: opcional, 'blacklist' | 'sin-keywords'
+  //  - limit: default 50, max 200
+  app.get('/api/descartados/lista', async (req, res) => {
+    try {
+      const portal = req.query.portal ? String(req.query.portal) : undefined;
+      const razon = req.query.razon ? String(req.query.razon) : undefined;
+      const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 200);
+
+      const items = await prisma.scrapeDescartado.findMany({
+        where: {
+          ...(portal && { portal }),
+          ...(razon && { razon }),
+        },
+        orderBy: { descartadoEn: 'desc' },
+        take: limit,
+      });
+
+      res.json({ ok: true, count: items.length, items });
+    } catch (error) {
+      console.error('[Dashboard] /api/descartados/lista:', error);
+      res.status(500).json({ ok: false, error: 'Error al listar descartados' });
+    }
+  });
+
+  // Sprint scrapers-portales (2026-06-30): count de descartes de las últimas 7d
+  // por portal — datos para el badge "💡 N descartados esta semana".
+  app.get('/api/descartados/count', async (_req, res) => {
+    try {
+      const desde = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const [total, porPortal] = await Promise.all([
+        prisma.scrapeDescartado.count({ where: { descartadoEn: { gte: desde } } }),
+        prisma.scrapeDescartado.groupBy({
+          by: ['portal'],
+          where: { descartadoEn: { gte: desde } },
+          _count: true,
+        }),
+      ]);
+      res.json({ ok: true, total, porPortal });
+    } catch (error) {
+      console.error('[Dashboard] /api/descartados/count:', error);
+      res.status(500).json({ ok: false, error: 'Error al contar' });
+    }
+  });
+
+  // Sprint scrapers-portales (2026-06-30): correr ahora un scraper manualmente.
+  // Útil para dev / debug + cuando agregamos un portal nuevo y queremos validar
+  // sin esperar al cron.
+  app.post('/api/scrapers/correr/:portal', mutationsLimiter, async (req, res) => {
+    try {
+      const portal = String(req.params.portal);
+      const { correrScraperUno } = await import('../agents/portales');
+      const result = await correrScraperUno(portal);
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      console.error('[Dashboard] /api/scrapers/correr:', error);
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Error' });
+    }
+  });
+
   // Sprint mapa (2026-06-27): reportes con coordenadas para el mapa.
   //
   // Query params:
