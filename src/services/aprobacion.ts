@@ -396,18 +396,18 @@ export async function editarPendiente(
     });
     return { ok: false, error: 'Reporte no encontrado' };
   }
-  // Sprint flow-unificado-aprobacion (2026-06-28): SOLO 'pendiente' editable.
-  // El estado 'pendiente_revision' quedó obsoleto. Reportes legacy migrados
-  // por SQL al deploy. Lo dejamos en la lista por backwards compat por si
-  // queda alguno en la DB de prod antes de aplicar la migration.
-  const estadosEditables = ['pendiente', 'pendiente_revision'];
+  // Sprint flow-unificado-aprobacion (2026-06-28): 'pendiente' editable.
+  // Sprint flujo-errores-editables (2026-06-30): + 'fallo_publicacion'
+  // para que Varone pueda corregir el campo culpable del fallo del publisher
+  // sin tener que descartar y crear de cero.
+  const estadosEditables = ['pendiente', 'pendiente_revision', 'fallo_publicacion'];
   if (!estadosEditables.includes(r.estado)) {
     void registrarAccion({
       evento: 'editar.fail.wrong-state', actor: editorPor, origen, reporteId: id,
       ip: ctx.ip, userAgent: ctx.userAgent,
       meta: { estadoActual: r.estado },
     });
-    return { ok: false, error: `Solo se pueden editar reportes pendiente o pendiente_revision (estado actual: ${r.estado})` };
+    return { ok: false, error: `Solo se pueden editar reportes pendiente, pendiente_revision o fallo_publicacion (estado actual: ${r.estado})` };
   }
   const norm = normalize(input);
   if (!norm.ok) {
@@ -465,6 +465,15 @@ export async function editarPendiente(
   };
   if (nuevoEstado !== r.estado) {
     dataFinal.estado = nuevoEstado;
+  }
+  // Sprint flujo-errores-editables (2026-06-30): si el reporte estaba en
+  // fallo_publicacion y se editó el campo culpable, limpiar el error metadata.
+  // El reintento del publisher va a popularlo de nuevo si vuelve a fallar.
+  if (r.estado === 'fallo_publicacion' && r.framerLastErrorField &&
+      Object.keys(norm.data).includes(r.framerLastErrorField)) {
+    dataFinal.framerLastError = null;
+    dataFinal.framerLastErrorField = null;
+    dataFinal.framerLastErrorValue = null;
   }
 
   const updated = await prisma.reporte.update({
