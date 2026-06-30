@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { type ReporteListItem } from '@/lib/backend';
 import { formatDate, cn } from '@/lib/utils';
-import { AprobarButton, DescartarButton, DespublicarButton } from './accion-buttons';
+import { AprobarButton, DescartarButton } from './accion-buttons';
 import { EditarReporteDialog } from './editar-reporte-dialog';
 import { CamposFramerInline } from './campos-framer-inline';
 
@@ -154,13 +154,12 @@ export function ReporteCard({ reporte, showActions = false }: Props) {
             </div>
           );
         })()}
-        {showActions && (reporte.estado === 'aprobado' || reporte.estado === 'publicado') && (
-          // Bypass humano del modo full-auto: si la IA auto-publicó algo mal,
-          // Despublicar lo borra de Framer + re-publica el sitio + marca descartado.
-          <div className="flex flex-col gap-2 sm:min-w-[10rem] sm:items-stretch">
-            <DespublicarButton id={reporte.id} />
-          </div>
-        )}
+        {/* Sprint flow-cleanup-legacy (2026-06-30): DespublicarButton removido.
+            Era del flow viejo donde el publisher Framer Server API permitía
+            borrar items y re-publicar el sitio. Hoy el sitio público es un
+            formulario y no expone delete — la única forma de "sacar" una nota
+            es contactando admin del sitio. Si la IA auto-publicó algo
+            erróneo, queda como aprendizaje del prompt. */}
       </div>
 
       {/* Footer */}

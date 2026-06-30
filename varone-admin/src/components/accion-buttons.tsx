@@ -125,6 +125,15 @@ export function DescartarButton({ id }: { id: number }) {
   );
 }
 
+/**
+ * @deprecated Sprint flow-cleanup-legacy (2026-06-30):
+ * Botón del flow viejo (Framer Server API permitía borrar items + republicar
+ * sitio). Hoy el sitio público es un formulario que no expone delete.
+ * Removido de las cards. Mantenido en código para que el endpoint backend
+ * /api/aprobacion/despublicar siga callable por scripts externos en
+ * emergencias. Plan de retire en Sprint+1 cuando se borre también el
+ * endpoint backend.
+ */
 export function DespublicarButton({ id }: { id: number }) {
   const router = useRouter();
   const [isPending, start] = useTransition();
@@ -185,6 +194,13 @@ export function DespublicarButton({ id }: { id: number }) {
   );
 }
 
+/**
+ * @deprecated Sprint flow-cleanup-legacy (2026-06-30):
+ * Botón "Publicar ahora" del flow viejo (cron 9 AM hacía publish del sitio
+ * entero). Hoy el publisher Playwright postea inmediato al aprobar — no
+ * existe el paso intermedio "aprobado pero no publicado". Removido del
+ * header de /aprobacion. Mantenido en código por compat hasta Sprint+1.
+ */
 export function PublicarSitioButton({ pendientesPublicar }: { pendientesPublicar: number }) {
   const router = useRouter();
   const [isPending, start] = useTransition();

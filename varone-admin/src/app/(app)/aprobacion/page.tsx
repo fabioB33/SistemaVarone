@@ -1,9 +1,11 @@
 import { listarReportes } from '@/lib/backend';
 import { EstadoTabs, type Estado } from '@/components/estado-tabs';
 import { ReporteCard } from '@/components/reporte-card';
-import { PublicarSitioButton } from '@/components/accion-buttons';
 import { WaStatusPanel } from '@/components/wa-status-panel';
 import { FuenteFilter } from '@/components/fuente-filter';
+// Sprint flow-cleanup-legacy (2026-06-30): PublicarSitioButton removido.
+// Era del flow viejo (cron 9 AM publish del sitio entero). Hoy el publisher
+// Playwright postea inmediato al aprobar, no hace falta paso intermedio.
 import {
   Inbox,
   CheckCircle2,
@@ -75,7 +77,6 @@ export default async function AprobacionPage({
             Si todo está OK, click directo en "Aprobar y publicar".
           </p>
         </div>
-        <PublicarSitioButton pendientesPublicar={counts.aprobado} />
       </header>
 
       {/* KPI strip */}
