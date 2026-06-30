@@ -15,7 +15,8 @@
     "test:typecheck": "tsc --noEmit",
     "test:ia": "tsx src/test/test-pipeline.ts",
     "test:dedup": "tsx src/test/test-dedup.ts",
-    "seed:demo": "tsx src/test/seed-demo.ts"
+    "seed:demo": "tsx src/test/seed-demo.ts",
+    "seed:demo-sql": "psql $DATABASE_URL -f prisma/seed/demo.sql"
   },
   "keywords": [],
   "author": "",

@@ -26,6 +26,8 @@ import {
 } from 'lucide-react';
 import { obtenerDashboardCounters, obtenerScrapersStatus } from '@/lib/backend';
 import { ScrapearAhoraButton } from './scrapear-ahora-button';
+import { ReporteHoyCounter } from './reporte-hoy-counter';
+import { WhatsAppWidget } from './whatsapp-widget';
 
 export const dynamic = 'force-dynamic';
 
@@ -69,15 +71,12 @@ export default async function DashboardPage() {
         <ScrapearAhoraButton />
       </header>
 
+      {/* WhatsApp widget — visible al toque para que Varone sepa si el bot está vivo */}
+      <WhatsAppWidget />
+
       {/* Actividad hoy / esta semana */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <article className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-5">
-          <p className="text-2xs uppercase tracking-wide text-fg-muted">Reportes hoy</p>
-          <p className="mt-1 text-3xl font-bold text-amber-600 dark:text-amber-400">
-            {c.actividad.reportesHoy}
-          </p>
-          <p className="mt-1 text-xs text-fg-muted">desde 00:00</p>
-        </article>
+        <ReporteHoyCounter initialValue={c.actividad.reportesHoy} />
 
         <article className="rounded-lg border border-border bg-bg-elevated p-5">
           <p className="text-2xs uppercase tracking-wide text-fg-muted">Esta semana</p>

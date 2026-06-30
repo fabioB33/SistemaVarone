@@ -3,6 +3,7 @@ import { EstadoTabs, type Estado } from '@/components/estado-tabs';
 import { ReporteCard } from '@/components/reporte-card';
 import { PublicarSitioButton } from '@/components/accion-buttons';
 import { WaStatusPanel } from '@/components/wa-status-panel';
+import { FuenteFilter } from '@/components/fuente-filter';
 import {
   Inbox,
   CheckCircle2,
@@ -23,18 +24,25 @@ function isValid(value: string | undefined): value is Estado {
 export default async function AprobacionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ estado?: string }>;
+  searchParams: Promise<{ estado?: string; fuente?: string }>;
 }) {
   const sp = await searchParams;
   const estado: Estado = isValid(sp.estado) ? sp.estado : 'pendiente';
+  // Sprint sugerencias-extras (2026-06-30): filtro por fuente.
+  const fuente: 'todos' | 'whatsapp' | 'scraping' =
+    sp.fuente === 'whatsapp' || sp.fuente === 'scraping' ? sp.fuente : 'todos';
 
-  const [pendientes, aprobados, publicados, descartados, items] = await Promise.all([
+  const [pendientes, aprobados, publicados, descartados, itemsRaw] = await Promise.all([
     listarReportes('pendiente'),
     listarReportes('aprobado'),
     listarReportes('publicado'),
     listarReportes('descartado'),
     listarReportes(estado),
   ]);
+
+  // Aplicar filtro por fuente client-side (el backend ya retorna todos los del estado).
+  const items =
+    fuente === 'todos' ? itemsRaw : itemsRaw.filter((r) => r.fuente === fuente);
 
   const counts = {
     pendiente: pendientes.length,
@@ -87,6 +95,9 @@ export default async function AprobacionPage({
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-4">
           <EstadoTabs estado={estado} counts={counts} />
+
+          {/* Sprint sugerencias-extras (2026-06-30): filtro por fuente. */}
+          <FuenteFilter estado={estado} fuente={fuente} itemsAll={itemsRaw} />
 
           {items.length === 0 ? (
             <EmptyState estado={estado} />

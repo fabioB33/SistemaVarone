@@ -11,6 +11,7 @@ import {
 } from '@/app/(app)/aprobacion/actions';
 import { cn } from '@/lib/utils';
 import { ConfirmDialog } from './confirm-dialog';
+import { toast } from './toast-container';
 
 /**
  * Sprint flow-unificado-aprobacion (2026-06-28): nuevo prop `disabledReason`.
@@ -32,8 +33,13 @@ export function AprobarButton({ id, disabledReason }: { id: number; disabledReas
           start(async () => {
             setErr(null);
             const r = await aprobarAction(id);
-            if (!r.ok) setErr(r.error || 'Error al aprobar');
-            else router.refresh();
+            if (!r.ok) {
+              setErr(r.error || 'Error al aprobar');
+              toast('error', r.error || 'No se pudo aprobar el reporte');
+            } else {
+              toast('success', '✅ Reporte aprobado y enviado al sitio público');
+              router.refresh();
+            }
           })
         }
         disabled={isDisabled}
@@ -70,9 +76,11 @@ export function DescartarButton({ id }: { id: number }) {
       const r = await descartarAction(id);
       if (!r.ok) {
         setErr(r.error || 'Error al descartar');
+        toast('error', r.error || 'No se pudo descartar el reporte');
         setOpen(false);
         return;
       }
+      toast('info', 'Reporte descartado');
       setOpen(false);
       router.refresh();
     });

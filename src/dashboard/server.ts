@@ -637,6 +637,112 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
+  // Sprint sugerencias-extras (2026-06-30): inyecta UN reporte demo "vivo"
+  // como si Clarín lo hubiera scrapeado en este instante. Útil para demos
+  // donde necesitamos que aparezca SI O SI un reporte al click del botón
+  // "Scrapear ahora" — los scrapers reales pueden no traer nada del nicho.
+  //
+  // Idempotente: si el hash ya existe (segunda vez que el demo se corre en
+  // la misma sesión), no inserta duplicado.
+  app.post('/api/demo/inyectar-vivo', mutationsLimiter, async (_req, res) => {
+    try {
+      const tsSlug = `demo-vivo-${Date.now()}`;
+      const ahora = new Date();
+      const hh = String(ahora.getHours()).padStart(2, '0');
+      const mm = String(ahora.getMinutes()).padStart(2, '0');
+
+      // Selección rotativa entre 3 escenarios para que la demo no muestre
+      // siempre lo mismo si lo apretás 2-3 veces.
+      const escenarios = [
+        {
+          portal: 'clarin',
+          tituloOriginal: 'Asaltaron a un camión con carga de electrónica en la Panamericana',
+          urlNoticia: 'https://www.clarin.com/policiales/panamericana-asalto-electronica.html',
+          ubicacion: 'Panamericana km 38 ramal Tigre',
+          ruta: 'Panamericana km 38 ramal Tigre',
+          tipoIncidente: 'robo_de_carga',
+          provincia: 'Buenos Aires',
+          descripcion: 'Piratas del asfalto interceptaron un camión cargado con electrodomésticos a la altura del km 38 de Panamericana. Dos delincuentes armados redujeron al chofer y se llevaron la mercadería. La Policía Bonaerense está investigando.',
+          textoOriginal: '[CLARIN] Asaltaron a un camión con carga de electrónica en Panamericana km 38 ramal Tigre. Conductor ileso.',
+          carga: 'Electrodomésticos',
+        },
+        {
+          portal: 'cronica',
+          tituloOriginal: 'Robaron un trailer con neumáticos en Ruta 9',
+          urlNoticia: 'https://cronica.com.ar/policiales/robo-trailer-neumaticos-ruta-9.html',
+          ubicacion: 'RN 9 km 102',
+          ruta: 'RN 9 km 102',
+          tipoIncidente: 'robo_de_carga',
+          provincia: 'Buenos Aires',
+          descripcion: 'Tres delincuentes asaltaron a un transportista en Ruta 9 km 102 y se llevaron un cargamento de neumáticos valuado en más de 30 millones de pesos. El chofer fue golpeado pero está estable.',
+          textoOriginal: '[CRONICA] Robaron un trailer con neumáticos en Ruta 9 km 102.',
+          carga: 'Repuestos y Neumáticos',
+        },
+        {
+          portal: 'la-nacion',
+          tituloOriginal: 'Tentativa de robo a camión cisterna en Acceso Oeste',
+          urlNoticia: 'https://www.lanacion.com.ar/seguridad/tentativa-robo-cisterna-acceso-oeste.html',
+          ubicacion: 'Acceso Oeste km 22',
+          ruta: 'Acceso Oeste km 22',
+          tipoIncidente: 'tentativa',
+          provincia: 'Buenos Aires',
+          descripcion: 'Un grupo de motochorros intentó asaltar a un camión cisterna en Acceso Oeste pero el chofer logró huir hacia un puesto policial. Detuvieron a 1 sospechoso.',
+          textoOriginal: '[LA NACION] Tentativa de robo a camión cisterna en Acceso Oeste km 22. Detuvieron a 1.',
+          carga: 'Combustibles - Insumos Petroleros',
+        },
+      ];
+
+      // Pickear según ms del timestamp (rota entre 3)
+      const escenario = escenarios[Date.now() % escenarios.length];
+
+      // Hash único por sesión (con timestamp para no chocar)
+      const crypto = await import('node:crypto');
+      const hash = crypto.createHash('sha256').update(`${tsSlug}-${escenario.ubicacion}`).digest('hex');
+
+      const reporte = await prisma.reporte.create({
+        data: {
+          hash,
+          fuente: 'scraping',
+          fecha: ahora.toISOString().slice(0, 10),
+          hora: `${hh}:${mm}`,
+          ubicacion: escenario.ubicacion,
+          ruta: escenario.ruta,
+          tipoIncidente: escenario.tipoIncidente,
+          gravedad: 'alta',
+          descripcion: escenario.descripcion,
+          textoOriginal: escenario.textoOriginal,
+          framerEnviado: false,
+          framerIntentos: 0,
+          estado: 'pendiente',
+          portalOrigen: escenario.portal,
+          tituloOriginal: escenario.tituloOriginal,
+          urlNoticia: escenario.urlNoticia,
+          provincia: escenario.provincia,
+          tipoIncidenteFramer: escenario.tipoIncidente === 'tentativa' ? 'Robo en grado de Tentantiva' : 'Robo Total',
+          fuerzaInterviniente: 'Policia de la PBA',
+          tipoVehiculo: 'Camión más Acoplado',
+          cargaTransportada: escenario.carga,
+          modusOperandi: 'Carga y Descarga',
+          huboViolencia: 'Si',
+          tipoVehiculoInvolucrado: 'Moto',
+          cantidadVehiculosInvolucrados: '1',
+          cantidadPersonasInvolucradas: '2',
+          camposFaltantes: [],
+        },
+      });
+
+      res.json({
+        ok: true,
+        reporteId: reporte.id,
+        portal: escenario.portal,
+        titulo: escenario.tituloOriginal,
+      });
+    } catch (error) {
+      console.error('[Dashboard] /api/demo/inyectar-vivo:', error);
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Error' });
+    }
+  });
+
   // Sprint demo-readiness (2026-06-30): status de cada portal para Centro de Comando.
   app.get('/api/scrapers/status', async (_req, res) => {
     try {

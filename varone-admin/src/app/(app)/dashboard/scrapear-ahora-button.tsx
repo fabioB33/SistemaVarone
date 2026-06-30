@@ -28,11 +28,24 @@ export function ScrapearAhoraButton() {
     setResultado(null);
     startTransition(async () => {
       try {
-        const res = await fetch('/api/scrapers/correr-todos', { method: 'POST' });
-        const data = (await res.json()) as CorrerTodosResponse;
+        // Disparo paralelo: scrapers reales + demo-vivo inyecta uno garantizado.
+        // El demo-vivo solo aplica en modo desarrollo / demo. En prod sin la env
+        // var DEMO_INJECT_ENABLED=1, el backend retorna 404 / 503 y lo ignoramos.
+        const [resScrapers, resDemo] = await Promise.all([
+          fetch('/api/scrapers/correr-todos', { method: 'POST' }),
+          fetch('/api/demo/inyectar-vivo', { method: 'POST' }).catch(() => null),
+        ]);
+        const data = (await resScrapers.json()) as CorrerTodosResponse;
+        // Si el demo-vivo respondió OK, sumamos +1 al pipeline para que el
+        // toast diga la verdad.
+        if (resDemo && resDemo.ok) {
+          data.totalEnviadosAlPipeline = (data.totalEnviadosAlPipeline ?? 0) + 1;
+        }
         setResultado(data);
         // Refresh server components para que los counters se actualicen
         router.refresh();
+        // Disparar evento custom para que counters animen
+        window.dispatchEvent(new CustomEvent('varone:reportes-actualizado'));
         // Limpiar el banner después de 8s
         setTimeout(() => setResultado(null), 8000);
       } catch (e) {

@@ -302,3 +302,22 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Sprint sugerencias-extras (2026-06-30) — bounce-once para counter */
+@keyframes vc-bounce-once {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-8px); }
+  60% { transform: translateY(-4px); }
+}
+.animate-bounce-once {
+  animation: vc-bounce-once 0.8s cubic-bezier(.4, 0, .2, 1);
+}
+
+/* Slide in desde la derecha para toasts */
+@keyframes vc-slide-in-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.animate-in.slide-in-from-right {
+  animation: vc-slide-in-right 0.3s ease-out;
+}
