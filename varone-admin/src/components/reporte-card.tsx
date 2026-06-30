@@ -12,6 +12,7 @@ import {
 import { type ReporteListItem } from '@/lib/backend';
 import { formatDate, cn } from '@/lib/utils';
 import { AprobarButton, DescartarButton } from './accion-buttons';
+import { ReintentarFalloButton } from './reintentar-fallo-button';
 import { EditarReporteDialog } from './editar-reporte-dialog';
 import { CamposFramerInline } from './campos-framer-inline';
 
@@ -110,15 +111,23 @@ export function ReporteCard({ reporte, showActions = false }: Props) {
               {reporte.fecha === 'desconocida' ? 'Fecha desconocida' : reporte.fecha}
               {reporte.hora && reporte.hora !== 'desconocida' && ` · ${reporte.hora}`}
             </span>
-            <span className="inline-flex items-center gap-1.5">
+            {/* Sprint flow-claridad (2026-06-30): source badge prominente con
+                color verde para WhatsApp / amber para portales. Antes era un
+                texto gris muteado igual al resto de los metadatos. */}
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-2xs font-semibold',
+                reporte.fuente === 'whatsapp'
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                  : 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+              )}
+            >
               <FuenteIcon className="size-3" />
-              {/* Sprint scrapers-portales (2026-06-30): si es scraping, mostrar
-                  el nombre del portal en lugar de "Web" genérico. */}
               {reporte.fuente === 'whatsapp'
                 ? 'WhatsApp'
                 : reporte.portalOrigen
-                  ? portalLabel(reporte.portalOrigen)
-                  : 'Web'}
+                  ? `📰 ${portalLabel(reporte.portalOrigen)}`
+                  : 'Portal web'}
             </span>
           </div>
 
@@ -154,12 +163,18 @@ export function ReporteCard({ reporte, showActions = false }: Props) {
             </div>
           );
         })()}
-        {/* Sprint flow-cleanup-legacy (2026-06-30): DespublicarButton removido.
-            Era del flow viejo donde el publisher Framer Server API permitía
-            borrar items y re-publicar el sitio. Hoy el sitio público es un
-            formulario y no expone delete — la única forma de "sacar" una nota
-            es contactando admin del sitio. Si la IA auto-publicó algo
-            erróneo, queda como aprendizaje del prompt. */}
+        {/* Sprint flow-claridad (2026-06-30): cards en fallo_publicacion
+            ofrecen Reintentar + Descartar inline. Antes había que ir a la
+            pestaña /errores-publicacion (escondida) para tener acciones. */}
+        {showActions && reporte.estado === 'fallo_publicacion' && (
+          <div className="flex flex-col gap-2 sm:min-w-[10rem] sm:items-stretch">
+            <ReintentarFalloButton id={reporte.id} />
+            <DescartarButton id={reporte.id} />
+          </div>
+        )}
+        {/* Sprint flow-cleanup-legacy (2026-06-30): DespublicarButton removido
+            para estados aprobado/publicado (era del flow viejo Framer Server
+            API). El sitio público hoy es un formulario sin delete. */}
       </div>
 
       {/* Footer */}

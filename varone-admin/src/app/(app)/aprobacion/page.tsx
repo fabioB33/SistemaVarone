@@ -8,16 +8,19 @@ import { FuenteFilter } from '@/components/fuente-filter';
 // Playwright postea inmediato al aprobar, no hace falta paso intermedio.
 import {
   Inbox,
-  CheckCircle2,
+  Loader2,
   Globe,
   Trash2,
   Sparkles,
   Activity,
+  AlertCircle,
 } from 'lucide-react';
+import { FlowExplainer } from './flow-explainer';
 
 export const dynamic = 'force-dynamic';
 
-const VALID_ESTADOS: readonly Estado[] = ['pendiente', 'aprobado', 'publicado', 'descartado'] as const;
+// Sprint flow-claridad (2026-06-30): + fallo_publicacion como estado válido.
+const VALID_ESTADOS: readonly Estado[] = ['pendiente', 'aprobado', 'publicado', 'fallo_publicacion', 'descartado'] as const;
 
 function isValid(value: string | undefined): value is Estado {
   return !!value && (VALID_ESTADOS as readonly string[]).includes(value);
@@ -34,10 +37,11 @@ export default async function AprobacionPage({
   const fuente: 'todos' | 'whatsapp' | 'scraping' =
     sp.fuente === 'whatsapp' || sp.fuente === 'scraping' ? sp.fuente : 'todos';
 
-  const [pendientes, aprobados, publicados, descartados, itemsRaw] = await Promise.all([
+  const [pendientes, aprobados, publicados, fallosPublic, descartados, itemsRaw] = await Promise.all([
     listarReportes('pendiente'),
     listarReportes('aprobado'),
     listarReportes('publicado'),
+    listarReportes('fallo_publicacion'),
     listarReportes('descartado'),
     listarReportes(estado),
   ]);
@@ -50,6 +54,7 @@ export default async function AprobacionPage({
     pendiente: pendientes.length,
     aprobado: aprobados.length,
     publicado: publicados.length,
+    fallo_publicacion: fallosPublic.length,
     descartado: descartados.length,
   };
 
@@ -72,23 +77,38 @@ export default async function AprobacionPage({
             Aprobación de reportes
           </h1>
           <p className="mt-1.5 text-sm text-fg-muted">
-            La IA Gemini clasifica los mensajes del grupo y completa el formulario público.
-            Si quedaron dropdowns ambiguos (amber), completalos y aprobá.
-            Si todo está OK, click directo en "Aprobar y publicar".
+            La IA Gemini clasifica los mensajes del grupo y de portales policiales,
+            y completa el formulario público. Si quedaron dropdowns ambiguos
+            (amber), completalos y aprobá. Si todo está OK, click directo en
+            "Aprobar y publicar".
           </p>
         </div>
       </header>
 
-      {/* KPI strip */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {/* Flow visual del estado de los reportes (Sprint flow-claridad 2026-06-30) */}
+      <FlowExplainer counts={counts} />
+
+      {/* KPI strip — 5 estados alineados con el flow real */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Kpi
           icon={Inbox}
-          label="Pendientes"
+          label="Para aprobar"
           value={counts.pendiente}
           accent={counts.pendiente > 0 ? 'warn' : 'muted'}
         />
-        <Kpi icon={CheckCircle2} label="Listos para publicar" value={counts.aprobado} accent={counts.aprobado > 0 ? 'info' : 'muted'} />
+        <Kpi
+          icon={Loader2}
+          label="En publicación"
+          value={counts.aprobado}
+          accent={counts.aprobado > 0 ? 'info' : 'muted'}
+        />
         <Kpi icon={Globe} label="Publicados" value={counts.publicado} accent="ok" />
+        <Kpi
+          icon={AlertCircle}
+          label="Errores"
+          value={counts.fallo_publicacion}
+          accent={counts.fallo_publicacion > 0 ? 'danger' : 'muted'}
+        />
         <Kpi icon={Trash2} label="Descartados" value={counts.descartado} accent="muted" />
       </div>
 
@@ -146,12 +166,13 @@ function Kpi({
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: number;
-  accent: 'warn' | 'info' | 'ok' | 'muted';
+  accent: 'warn' | 'info' | 'ok' | 'danger' | 'muted';
 }) {
   const accentMap = {
-    warn:   { iconCls: 'text-warn',  valueCls: 'text-fg' },
-    info:   { iconCls: 'text-info',  valueCls: 'text-fg' },
-    ok:     { iconCls: 'text-ok',    valueCls: 'text-fg' },
+    warn:   { iconCls: 'text-warn',   valueCls: 'text-fg' },
+    info:   { iconCls: 'text-info',   valueCls: 'text-fg' },
+    ok:     { iconCls: 'text-ok',     valueCls: 'text-fg' },
+    danger: { iconCls: 'text-danger', valueCls: 'text-fg' },
     muted:  { iconCls: 'text-fg-subtle', valueCls: 'text-fg-secondary' },
   } as const;
   const cfg = accentMap[accent];
@@ -178,19 +199,24 @@ function EmptyState({ estado }: { estado: Estado }) {
       desc: 'Cuando llegue un mensaje al grupo de WhatsApp, la IA lo clasifica y aparece acá para que lo revises y apruebes.',
     },
     aprobado: {
-      icon: CheckCircle2,
-      title: 'Sin reportes esperando publicación',
-      desc: 'Los reportes aprobados se publican automáticamente al sitio público vía Playwright. Si quedan acá es porque el publisher tardó o falló (mirá la pestaña errores).',
+      icon: Loader2,
+      title: 'Sin reportes en publicación',
+      desc: 'El publisher Playwright tarda 5-30s en postear cada reporte aprobado. Si quedan acá mucho tiempo, mirá la pestaña Errores.',
     },
     publicado: {
       icon: Globe,
       title: 'Aún no hay publicados',
-      desc: 'Los reportes ya visibles en el sitio público se listan acá. Si alguno está mal, podés despublicarlo.',
+      desc: 'Los reportes que ya llegaron al sitio público se listan acá.',
+    },
+    fallo_publicacion: {
+      icon: AlertCircle,
+      title: 'Sin errores de publicación',
+      desc: 'Cuando el publisher Playwright falle (sitio caído, selector cambió, sesión vencida), los reportes aparecen acá para reintentar o descartar.',
     },
     descartado: {
       icon: Trash2,
       title: 'Papelera vacía',
-      desc: 'Reportes descartados por la IA o despublicados manualmente quedan acá como referencia.',
+      desc: 'Reportes que Varone descartó quedan acá como referencia.',
     },
   };
   const { icon: Icon, title, desc } = config[estado];

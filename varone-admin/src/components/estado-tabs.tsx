@@ -1,8 +1,18 @@
 import Link from 'next/link';
-import { Inbox, CheckCircle2, Globe, Trash2 } from 'lucide-react';
+import { Inbox, Loader2, Globe, AlertCircle, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type Estado = 'pendiente' | 'aprobado' | 'publicado' | 'descartado';
+// Sprint flow-claridad (2026-06-30): labels alineados con el flow real
+// (post-pivot a Playwright). Antes los labels eran del flow viejo donde
+// había un cron 9AM/21hs que publicaba el sitio. Hoy el publisher postea
+// inmediato al aprobar.
+//
+//   pendiente            → Varone tiene que decidir
+//   aprobado             → publisher trabajando (puede tardar 5-30s)
+//   publicado            → llegó al sitio público
+//   fallo_publicacion    → publisher falló, requiere acción
+//   descartado           → terminal
+export type Estado = 'pendiente' | 'aprobado' | 'publicado' | 'fallo_publicacion' | 'descartado';
 
 interface TabDef {
   value: Estado;
@@ -10,14 +20,15 @@ interface TabDef {
   hint: string;
   icon: React.ComponentType<{ className?: string }>;
   /** Color de acento cuando el contador es > 0. */
-  accent: 'warn' | 'info' | 'ok' | 'muted';
+  accent: 'warn' | 'info' | 'ok' | 'danger' | 'muted';
 }
 
 const TABS: readonly TabDef[] = [
-  { value: 'pendiente',  label: 'Reintentando',          hint: 'fallaron en Framer, reintenta cron 15min', icon: Inbox,        accent: 'warn'  },
-  { value: 'aprobado',   label: 'Listos para publicar',  hint: 'IA aprobó, espera cron publish 9 AM o 21 hs', icon: CheckCircle2, accent: 'info'  },
-  { value: 'publicado',  label: 'Publicados',            hint: 'visibles en el sitio',                     icon: Globe,        accent: 'ok'    },
-  { value: 'descartado', label: 'Descartados',           hint: 'papelera (descartado por IA o despublicado)', icon: Trash2,       accent: 'muted' },
+  { value: 'pendiente',         label: 'Para aprobar',   hint: 'Varone decide: aprobar o descartar',  icon: Inbox,       accent: 'warn'   },
+  { value: 'aprobado',          label: 'En publicación', hint: 'publisher Playwright trabajando',     icon: Loader2,     accent: 'info'   },
+  { value: 'publicado',         label: 'Publicados',     hint: 'visibles en el sitio público',        icon: Globe,       accent: 'ok'     },
+  { value: 'fallo_publicacion', label: 'Errores',        hint: 'publisher falló, requiere acción',    icon: AlertCircle, accent: 'danger' },
+  { value: 'descartado',        label: 'Descartados',    hint: 'Varone NO los publicó',               icon: Trash2,      accent: 'muted'  },
 ];
 
 interface Props {
@@ -64,6 +75,7 @@ export function EstadoTabs({ estado, counts }: Props) {
                   showAccentCount && tab.accent === 'warn' && 'bg-warn/15 text-warn',
                   showAccentCount && tab.accent === 'info' && 'bg-info/15 text-info',
                   showAccentCount && tab.accent === 'ok' && 'bg-ok/15 text-ok',
+                  showAccentCount && tab.accent === 'danger' && 'bg-danger/15 text-danger',
                   showAccentCount && tab.accent === 'muted' && 'bg-subtle/60 text-fg-muted',
                 )}
               >
