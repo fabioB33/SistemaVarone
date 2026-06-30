@@ -30,7 +30,7 @@ export function LoginForm({ next, initialError }: Props) {
         setError(data.error || 'Credenciales inválidas');
         return;
       }
-      router.replace(next || '/aprobacion?estado=pendiente');
+      router.replace(next || '/dashboard');
       router.refresh();
     });
   }

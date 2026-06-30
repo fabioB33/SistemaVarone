@@ -623,6 +623,90 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
+  // Sprint demo-readiness (2026-06-30): correr TODOS los scrapers en paralelo.
+  app.post('/api/scrapers/correr-todos', mutationsLimiter, async (_req, res) => {
+    try {
+      const { correrTodosLosScrapers } = await import('../agents/portales');
+      const resultados = await correrTodosLosScrapers();
+      const totalNotas = resultados.reduce((acc, r) => acc + r.notasScrapeadas, 0);
+      const totalEnviadosAlPipeline = resultados.reduce((acc, r) => acc + r.enviadosAlPipeline, 0);
+      res.json({ ok: true, totalNotas, totalEnviadosAlPipeline, portales: resultados });
+    } catch (error) {
+      console.error('[Dashboard] /api/scrapers/correr-todos:', error);
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Error' });
+    }
+  });
+
+  // Sprint demo-readiness (2026-06-30): status de cada portal para Centro de Comando.
+  app.get('/api/scrapers/status', async (_req, res) => {
+    try {
+      const { SCRAPERS } = await import('../agents/portales');
+      const desde24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const portales = await Promise.all(
+        Object.keys(SCRAPERS).map(async (portal) => {
+          const [reportes24h, descartados24h, ultimoReporte] = await Promise.all([
+            prisma.reporte.count({ where: { portalOrigen: portal, creadoEn: { gte: desde24h } } }),
+            prisma.scrapeDescartado.count({ where: { portal, descartadoEn: { gte: desde24h } } }),
+            prisma.reporte.findFirst({
+              where: { portalOrigen: portal },
+              orderBy: { creadoEn: 'desc' },
+              select: { creadoEn: true },
+            }),
+          ]);
+          const tieneActividad24h = reportes24h > 0 || descartados24h > 0;
+          const tieneAlgunaActividad = !!ultimoReporte;
+          const status: 'healthy' | 'stale' | 'unknown' = tieneActividad24h
+            ? 'healthy'
+            : tieneAlgunaActividad
+              ? 'stale'
+              : 'unknown';
+          return { portal, status, reportes24h, descartados24h, ultimoReporteEn: ultimoReporte?.creadoEn ?? null };
+        }),
+      );
+      res.json({ ok: true, portales });
+    } catch (error) {
+      console.error('[Dashboard] /api/scrapers/status:', error);
+      res.status(500).json({ ok: false, error: 'Error' });
+    }
+  });
+
+  // Sprint demo-readiness (2026-06-30): counters para Centro de Comando.
+  app.get('/api/dashboard/counters', async (_req, res) => {
+    try {
+      const hoy = new Date();
+      hoy.setHours(0, 0, 0, 0);
+      const desde24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const desde7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+      const [
+        pendientes, aprobados, publicados, descartados, falloPublicacion,
+        reportesHoy, reportesEsteSemana, descartesHoy,
+        whatsapp7d, scraping7d,
+      ] = await Promise.all([
+        prisma.reporte.count({ where: { estado: 'pendiente' } }),
+        prisma.reporte.count({ where: { estado: 'aprobado' } }),
+        prisma.reporte.count({ where: { estado: 'publicado' } }),
+        prisma.reporte.count({ where: { estado: 'descartado' } }),
+        prisma.reporte.count({ where: { estado: 'fallo_publicacion' } }),
+        prisma.reporte.count({ where: { creadoEn: { gte: hoy } } }),
+        prisma.reporte.count({ where: { creadoEn: { gte: desde7d } } }),
+        prisma.scrapeDescartado.count({ where: { descartadoEn: { gte: desde24h } } }),
+        prisma.reporte.count({ where: { fuente: 'whatsapp', creadoEn: { gte: desde7d } } }),
+        prisma.reporte.count({ where: { fuente: 'scraping', creadoEn: { gte: desde7d } } }),
+      ]);
+
+      res.json({
+        ok: true,
+        estados: { pendientes, aprobados, publicados, descartados, falloPublicacion },
+        actividad: { reportesHoy, reportesEsteSemana, descartesHoy },
+        fuentes: { whatsapp7d, scraping7d },
+      });
+    } catch (error) {
+      console.error('[Dashboard] /api/dashboard/counters:', error);
+      res.status(500).json({ ok: false, error: 'Error' });
+    }
+  });
+
   // Sprint mapa (2026-06-27): reportes con coordenadas para el mapa.
   //
   // Query params:

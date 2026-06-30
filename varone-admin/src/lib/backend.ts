@@ -413,3 +413,45 @@ export async function correrScraperManual(portal: string): Promise<{
     body: JSON.stringify({}),
   });
 }
+
+// ─── Sprint demo-readiness (2026-06-30) ────────────────────────────────────
+
+export interface PortalStatus {
+  portal: string;
+  status: 'healthy' | 'stale' | 'unknown';
+  reportes24h: number;
+  descartados24h: number;
+  ultimoReporteEn: string | null;
+}
+
+export async function obtenerScrapersStatus(): Promise<PortalStatus[]> {
+  const r = await backendFetch<unknown>('/api/scrapers/status');
+  if (!r.ok) return [];
+  const raw = r as unknown as { portales?: PortalStatus[] };
+  return raw.portales || [];
+}
+
+export interface DashboardCounters {
+  estados: { pendientes: number; aprobados: number; publicados: number; descartados: number; falloPublicacion: number };
+  actividad: { reportesHoy: number; reportesEsteSemana: number; descartesHoy: number };
+  fuentes: { whatsapp7d: number; scraping7d: number };
+}
+
+export async function obtenerDashboardCounters(): Promise<DashboardCounters | null> {
+  const r = await backendFetch<unknown>('/api/dashboard/counters');
+  if (!r.ok) return null;
+  return r as unknown as DashboardCounters;
+}
+
+export async function correrTodosLosScrapers(): Promise<{
+  ok: boolean;
+  error?: string;
+  totalNotas?: number;
+  totalEnviadosAlPipeline?: number;
+  portales?: Array<{ portal: string; notasScrapeadas: number; pasaronPrefiltro: number; descartadosBlacklist: number; descartadosSinKeywords: number; enviadosAlPipeline: number; duracionMs: number }>;
+}> {
+  return backendFetch('/api/scrapers/correr-todos', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}

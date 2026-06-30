@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LogOut, Truck, Map as MapIcon, Inbox, Trash2 } from 'lucide-react';
+import { LogOut, Truck, Map as MapIcon, Inbox, Trash2, LayoutDashboard } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AlertasBadge } from './alertas-badge';
 import { ErroresPublicacionBadge } from './errores-publicacion-badge';
@@ -13,6 +13,8 @@ import { PublisherHealthBadge } from './publisher-health-badge';
 // /aprobacion. Un solo badge de acción humana = "Aprobación".
 
 const NAV_LINKS = [
+  // Sprint demo-readiness (2026-06-30): home/centro de comando.
+  { href: '/dashboard', label: 'Inicio', icon: LayoutDashboard, matchPaths: ['/dashboard'] },
   { href: '/aprobacion?estado=pendiente', label: 'Aprobación', icon: Inbox, matchPaths: ['/aprobacion'] },
   { href: '/mapa', label: 'Mapa', icon: MapIcon, matchPaths: ['/mapa'] },
   // Sprint scrapers-portales (2026-06-30): auditoría del pre-filtro.

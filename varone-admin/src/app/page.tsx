@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 
 export default function HomePage() {
-  redirect('/aprobacion?estado=pendiente');
+  // Sprint demo-readiness (2026-06-30): home redirige al centro de comando.
+  redirect('/dashboard');
 }

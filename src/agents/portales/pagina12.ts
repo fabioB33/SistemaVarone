@@ -2,9 +2,12 @@
  * Sprint scrapers-portales (2026-06-30) — Scraper Página 12.
  * Sección Sociedad: https://www.pagina12.com.ar/secciones/sociedad
  *
- * Nota: P12 no tiene sección "policiales" propiamente — la cobertura de
- * piratería del asfalto suele caer en Sociedad. Si es muy ruidoso, podemos
- * cambiar a una búsqueda por query con `q=camion+asalto`.
+ * NOTA empírica (smoke real 2026-06-30): P12 NO usa <article>. Su sistema es
+ * `.p12-article-card-full` con `.c-link` adentro como anchor. Los headlines
+ * vienen como hijo del anchor con tags h2/h3.
+ *
+ * P12 no tiene sección "policiales" propia — los hechos de piratería caen en
+ * Sociedad. El pre-filtro descarta lo no relevante.
  */
 
 import { ENV } from '../../config/env';
@@ -23,32 +26,40 @@ export const pagina12Scraper: PortalScraper = {
   async scrape(): Promise<NotaScrapeada[]> {
     try {
       const { body } = await fetchHtml(URL_SECCION);
-      const { all, text, attr } = parseDocument(body);
+      const { all } = parseDocument(body);
 
-      const cards = all('article, .article-item, .item-titulo');
+      // Estrategia 2026-06-30: P12 usa `.p12-article-card-full` + `.c-link`.
+      // Fallback: cualquier anchor a /YYYY-MM/.../ (formato URL de notas).
+      const cards = all('.p12-article-card-full, .p12-wrapper-article-card, article');
+      const seen = new Set<string>();
       const notas: NotaScrapeada[] = [];
 
       for (const card of cards) {
-        const linkEl = card.querySelector('a[href*="/"]');
-        const url = absoluteUrl(linkEl?.getAttribute('href') || '', BASE);
-        if (!url) continue;
+        const linkEl = card.querySelector('a.c-link, a[href*="/"]');
+        const href = linkEl?.getAttribute('href') || '';
+        if (!href) continue;
 
-        // Filtra URLs que NO sean notas (taggers, secciones, etc.)
-        if (url.includes('/tag/') || url.includes('/secciones/')) continue;
+        // Filtra URLs no-nota
+        if (href.includes('/tag/') || href.includes('/secciones/') || href.includes('#')) continue;
 
-        const titulo = (text('h2, h3, .title-list, [class*="title"]', card) || linkEl?.textContent || '').trim();
+        const url = absoluteUrl(href, BASE);
+        if (seen.has(url)) continue;
+        seen.add(url);
+
+        // Título: h2/h3 si existe, sino el texto del anchor
+        const tituloEl = card.querySelector('h1, h2, h3, .p12-article-card-full--title');
+        const titulo = (tituloEl?.textContent || linkEl?.textContent || '').trim();
         if (!titulo || titulo.length < 10) continue;
 
-        const resumen = limpiarResumen(text('.bajada, .volanta, .summary, p', card));
-        const fechaStr = attr('time', 'datetime', card) || text('time', card);
-        const publishedAt = fechaStr ? new Date(fechaStr) : null;
+        const resumenEl = card.querySelector('.p12-article-card-full--bajada, .bajada, .epigraph');
+        const resumen = limpiarResumen(resumenEl?.textContent || '');
 
         notas.push({
           portal: 'pagina12',
           url,
           titulo,
           resumen,
-          publishedAt: publishedAt && !isNaN(publishedAt.getTime()) ? publishedAt : null,
+          publishedAt: null,
         });
 
         if (notas.length >= ENV.SCRAPER_MAX_NOTAS_POR_PORTAL) break;

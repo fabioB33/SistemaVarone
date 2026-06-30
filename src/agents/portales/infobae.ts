@@ -1,6 +1,14 @@
 /**
  * Sprint scrapers-portales (2026-06-30) — Scraper Infobae.
- * Sección Sociedad / Policiales: https://www.infobae.com/sociedad/policiales/
+ * Sección Policiales: https://www.infobae.com/sociedad/policiales/
+ *
+ * NOTA empírica (smoke real 2026-06-30): Infobae es un React app que
+ * hidrata los `<article>` con JS. El HTML inicial NO tiene cards, pero SÍ
+ * tiene los anchors `<a href="/sociedad/policiales/...">` en estado pre-hidratación.
+ *
+ * Estrategia: extraer notas DESDE los anchors directos, no del wrapper. Tomamos
+ * el texto del anchor como titular (los anchors de Infobae traen el headline
+ * como contenido textual).
  */
 
 import { ENV } from '../../config/env';
@@ -19,30 +27,33 @@ export const infobaeScraper: PortalScraper = {
   async scrape(): Promise<NotaScrapeada[]> {
     try {
       const { body } = await fetchHtml(URL_SECCION);
-      const { all, text, attr } = parseDocument(body);
+      const { all } = parseDocument(body);
 
-      // Infobae usa <article> con data-testid o clases tipo story-card
-      const cards = all('article, [data-testid*="story"], .story-card, .feed-list-card');
+      // Estrategia 2026-06-30: anchors directos a notas. Los URLs siguen el patrón
+      // /sociedad/policiales/YYYY/MM/DD/slug-de-la-nota/.
+      const anchors = all('a[href*="/sociedad/policiales/"]');
+      const seen = new Set<string>();
       const notas: NotaScrapeada[] = [];
 
-      for (const card of cards) {
-        const linkEl = card.querySelector('a[href*="/sociedad/"], a[href*="/policiales/"]');
-        const url = absoluteUrl(linkEl?.getAttribute('href') || '', BASE);
-        if (!url) continue;
+      for (const a of anchors) {
+        const href = a.getAttribute('href') || '';
+        // Solo URLs que parecen notas (YYYY/MM/DD/slug) — no listings ni filtros.
+        if (!/\/sociedad\/policiales\/\d{4}\/\d{2}\/\d{2}\//.test(href)) continue;
+        const url = absoluteUrl(href, BASE);
+        if (seen.has(url)) continue;
+        seen.add(url);
 
-        const titulo = (text('h2, h3, .title, [class*="headline"]', card) || linkEl?.textContent || '').trim();
-        if (!titulo || titulo.length < 10) continue;
+        const titulo = (a.textContent || '').trim();
+        if (!titulo || titulo.length < 15) continue;
 
-        const resumen = limpiarResumen(text('.bajada, .summary, .deck, [class*="subheadline"], p', card));
-        const fechaStr = attr('time', 'datetime', card) || text('time', card);
-        const publishedAt = fechaStr ? new Date(fechaStr) : null;
-
+        // El resumen no está en el anchor — pero el título de Infobae suele ser
+        // descriptivo. Resumen vacío es OK, la IA decide con el titular.
         notas.push({
           portal: 'infobae',
           url,
           titulo,
-          resumen,
-          publishedAt: publishedAt && !isNaN(publishedAt.getTime()) ? publishedAt : null,
+          resumen: limpiarResumen(titulo, 600),
+          publishedAt: null,
         });
 
         if (notas.length >= ENV.SCRAPER_MAX_NOTAS_POR_PORTAL) break;
