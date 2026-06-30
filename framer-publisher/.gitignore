@@ -4,3 +4,6 @@ dist/
 *.log
 # Sprint pivot-framer-form: cookies/sesión Playwright persistidas (sensible).
 data/
+
+# Scripts de smoke ad-hoc usados durante desarrollo (no son código de producción).
+smoke-*.mjs
