@@ -135,15 +135,28 @@ export async function enviarAFramer(reporteId: number): Promise<{ ok: boolean; e
         data: {
           estado: 'publicado',
           framerItemId: resp.urlFinal || null,
+          // Sprint flujo-errores-editables (2026-06-30): éxito → limpiar error previo.
+          framerLastError: null,
+          framerLastErrorField: null,
+          framerLastErrorValue: null,
         },
       });
       logger.info(`[Framer] Reporte ${reporteId} publicado en form. URL=${resp.urlFinal}`);
       return { ok: true };
     } else {
       await incrementarIntentosFramer(reporteId);
+      // Sprint flujo-errores-editables (2026-06-30): parsear y persistir
+      // el error para que la UI pueda resaltar el campo culpable.
+      const { parseFramerError } = await import('./framer-error-parser');
+      const parsed = parseFramerError(resp.error);
       await prisma.reporte.update({
         where: { id: reporteId },
-        data: { estado: 'fallo_publicacion' },
+        data: {
+          estado: 'fallo_publicacion',
+          framerLastError: parsed.raw || null,
+          framerLastErrorField: parsed.fieldKey,
+          framerLastErrorValue: parsed.attemptedValue,
+        },
       });
       logger.error(`[Framer] Publisher devolvió error: ${resp.error}`);
       return { ok: false, error: resp.error || 'sin mensaje' };
@@ -151,6 +164,19 @@ export async function enviarAFramer(reporteId: number): Promise<{ ok: boolean; e
   } catch (error) {
     await incrementarIntentosFramer(reporteId);
     const msg = error instanceof Error ? error.message : String(error);
+    // Sprint flujo-errores-editables: también persistimos el error de excepción
+    // (publisher caído, timeout, etc.). El parser retorna campos null si no
+    // matchea el shape canonical — sigue siendo útil mostrar el raw.
+    const { parseFramerError } = await import('./framer-error-parser');
+    const parsed = parseFramerError(msg);
+    await prisma.reporte.update({
+      where: { id: reporteId },
+      data: {
+        framerLastError: parsed.raw || null,
+        framerLastErrorField: parsed.fieldKey,
+        framerLastErrorValue: parsed.attemptedValue,
+      },
+    }).catch(() => {});
     logger.error(`[Framer] Error llamando al publisher: ${msg}`);
     return { ok: false, error: msg };
   }

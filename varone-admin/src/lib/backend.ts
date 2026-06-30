@@ -49,6 +49,12 @@ export interface ReporteListItem {
   portalOrigen: string | null;
   tituloOriginal: string | null;
   publishedAt: string | null;
+
+  // Sprint flujo-errores-editables (2026-06-30): metadata del último fallo
+  // de publicación. Permite al UI resaltar el campo culpable.
+  framerLastError: string | null;
+  framerLastErrorField: string | null;
+  framerLastErrorValue: string | null;
 }
 
 // Sprint scrapers-portales (2026-06-30)

@@ -12,7 +12,8 @@ import {
 import { type ReporteListItem } from '@/lib/backend';
 import { formatDate, cn } from '@/lib/utils';
 import { AprobarButton, DescartarButton } from './accion-buttons';
-import { ReintentarFalloButton } from './reintentar-fallo-button';
+// Sprint flujo-errores-editables (2026-06-30): ReintentarFalloButton removido,
+// el botón unificado ahora vive dentro de CamposFramerInline (modo correccion).
 import { EditarReporteDialog } from './editar-reporte-dialog';
 import { CamposFramerInline } from './campos-framer-inline';
 
@@ -139,9 +140,17 @@ export function ReporteCard({ reporte, showActions = false }: Props) {
           {/* Sprint flow-unificado-aprobacion (2026-06-28): bloque inline
               con los 10 campos canonical del form Framer. Los faltantes
               salen en amber con select inline. Cuando se completan, el
-              botón "Aprobar" se habilita (ver lógica en disabledReason). */}
+              botón "Aprobar" se habilita (ver lógica en disabledReason).
+
+              Sprint flujo-errores-editables (2026-06-30): cuando el estado
+              es fallo_publicacion, todos los 10 campos son editables y el
+              culpable (framerLastErrorField) sale en rojo destacado, con
+              botón unificado "Corregir y reintentar publicación". */}
           {reporte.estado === 'pendiente' && (
             <CamposFramerInline reporte={reporte} />
+          )}
+          {reporte.estado === 'fallo_publicacion' && (
+            <CamposFramerInline reporte={reporte} modoCorrecciónFallo />
           )}
         </div>
 
@@ -163,12 +172,12 @@ export function ReporteCard({ reporte, showActions = false }: Props) {
             </div>
           );
         })()}
-        {/* Sprint flow-claridad (2026-06-30): cards en fallo_publicacion
-            ofrecen Reintentar + Descartar inline. Antes había que ir a la
-            pestaña /errores-publicacion (escondida) para tener acciones. */}
+        {/* Sprint flujo-errores-editables (2026-06-30): cards en fallo_publicacion
+            ahora muestran el bloque inline editable (más arriba en el JSX)
+            con botón unificado "Corregir y reintentar". Acá solo queda el
+            botón Descartar para casos terminales. */}
         {showActions && reporte.estado === 'fallo_publicacion' && (
           <div className="flex flex-col gap-2 sm:min-w-[10rem] sm:items-stretch">
-            <ReintentarFalloButton id={reporte.id} />
             <DescartarButton id={reporte.id} />
           </div>
         )}

@@ -4,9 +4,13 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { LogOut, Truck, Map as MapIcon, Inbox, Trash2, LayoutDashboard } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { AlertasBadge } from './alertas-badge';
-import { ErroresPublicacionBadge } from './errores-publicacion-badge';
-import { PublisherHealthBadge } from './publisher-health-badge';
+import { SistemaStatusWidget } from './sistema-status-widget';
+
+// Sprint flujo-errores-editables (2026-06-30): los 3 badges sueltos
+// (PublisherHealthBadge + ErroresPublicacionBadge + AlertasBadge) se
+// reemplazaron por SistemaStatusWidget con labels visibles.
+// El badge "Errores publicación" se removió porque ya hay tab "Errores"
+// en /aprobacion con counter visible + acciones inline.
 
 // Sprint flow-unificado-aprobacion (2026-06-28): PendientesRevisionBadge
 // eliminado. Los campos faltantes ahora viven inline en la card de
@@ -82,9 +86,7 @@ export function Topbar({ user }: Props) {
 
         {/* Right cluster */}
         <div className="flex items-center gap-3">
-          <PublisherHealthBadge />
-          <ErroresPublicacionBadge />
-          <AlertasBadge />
+          <SistemaStatusWidget />
           <div className="hidden items-center gap-2 rounded-full border border-line bg-surface/60 px-3 py-1.5 text-xs sm:flex">
             <span className="text-fg-muted">Sesión</span>
             <span className="size-1 rounded-full bg-fg-subtle" />

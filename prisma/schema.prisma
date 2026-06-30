@@ -65,6 +65,15 @@ model Reporte {
   framerSlug     String?  @map("framer_slug")
   ogImageUrl     String?  @map("og_image_url")
 
+  // Sprint flujo-errores-editables (2026-06-30): cuando el publisher falla con
+  // un dropdown specific (ej. "No pude seleccionar 'Cisterna' en el dropdown
+  // 'Tipo de Vehículo'"), persistimos el error parseado para que la UI pueda:
+  //  - mostrar el campo culpable en rojo
+  //  - sugerir corrección con las opciones canonical
+  framerLastError      String? @map("framer_last_error")        // mensaje raw del publisher
+  framerLastErrorField String? @map("framer_last_error_field")  // key canonical, ej. 'tipoVehiculo'
+  framerLastErrorValue String? @map("framer_last_error_value")  // valor que intentó, ej. 'Cisterna'
+
   @@map("reportes")
   @@index([estado])
 }

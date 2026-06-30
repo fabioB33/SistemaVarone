@@ -55,6 +55,13 @@ export interface ReportePublic {
   cantidadVehiculosInvolucrados: string | null;
   cantidadPersonasInvolucradas: string | null;
   camposFaltantes: string[];
+
+  // Sprint flujo-errores-editables (2026-06-30): metadata del último fallo
+  // de publicación. Permite que el UI resalte el campo culpable y sugiera
+  // corrección con las opciones canonical disponibles.
+  framerLastError: string | null;
+  framerLastErrorField: string | null;
+  framerLastErrorValue: string | null;
 }
 
 /** Estados válidos del Reporte. */
