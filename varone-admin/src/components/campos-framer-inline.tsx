@@ -22,7 +22,7 @@ import { Check, AlertCircle, Save, RotateCcw, X } from 'lucide-react';
 import { CAMPOS_FRAMER_SPEC, ORDEN_CAMPOS_FRAMER } from '@/lib/enums-framer';
 import type { ReporteListItem, ReporteEditableFields } from '@/lib/backend';
 import { completarCamposFramerAction } from '@/app/(app)/aprobacion/actions';
-import { reintentarPublicacionAction } from '@/app/(app)/errores-publicacion/actions';
+import { reintentarPublicacionAction } from '@/app/(app)/aprobacion/actions';
 import { toast } from './toast-container';
 
 interface Props {

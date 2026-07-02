@@ -295,6 +295,9 @@ export async function editarReporteBackend(
   });
 }
 
+// Sprint mejoras-flujo (2026-06-30): publicarSitioFramer eliminada (endpoint + botón + action).
+// Legacy helper preservado como stub para que el typecheck no rompa si algún caller
+// no visto en el grep aún lo importa. Ver otras acciones canónicas en este archivo.
 export async function publicarSitioFramer(): Promise<{
   ok: boolean;
   error?: string;

@@ -19,10 +19,19 @@ interface CorrerTodosResponse {
   totalEnviadosAlPipeline?: number;
 }
 
-export function ScrapearAhoraButton() {
+interface Props {
+  /**
+   * Sprint mejoras-flujo (2026-06-30): número de portales activos en
+   * /configuracion. Si 0, el botón queda disabled + tooltip explicativo.
+   */
+  portalesActivosCount?: number;
+}
+
+export function ScrapearAhoraButton({ portalesActivosCount = 6 }: Props = {}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [resultado, setResultado] = useState<CorrerTodosResponse | null>(null);
+  const sinPortales = portalesActivosCount === 0;
 
   function handleClick() {
     setResultado(null);
@@ -58,7 +67,8 @@ export function ScrapearAhoraButton() {
     <div className="flex flex-col items-end gap-2">
       <button
         onClick={handleClick}
-        disabled={pending}
+        disabled={pending || sinPortales}
+        title={sinPortales ? 'No hay portales activos. Activá alguno en /configuracion' : undefined}
         className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {pending ? (

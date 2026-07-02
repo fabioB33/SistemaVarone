@@ -10,8 +10,7 @@ import { iniciarWhatsApp, detenerWhatsApp } from './agents/whatsapp';
 import { startDashboard } from './dashboard/server';
 import { reintentarFramerPendientes } from './services/pipeline';
 import { enviarHealthcheck, verificarSaludWaSilencioso } from './services/healthcheck';
-import { publicarSitio } from './services/framer';
-import { marcarPublicadosTrasPublish } from './services/aprobacion';
+// Sprint mejoras-flujo (2026-06-30): imports removidos por retire de publicarSitio.
 import { backupDiario, backupWaSession } from './services/backups';
 import { ejecutarChequeosIA } from './services/health-ai';
 import logger from './services/logger';
@@ -115,25 +114,10 @@ async function main() {
     await verificarSaludWaSilencioso();
   });
 
-  // Cron: publish del sitio Framer 2x/día (9:00 AM y 21:00 hs Argentina).
-  // Toma todos los reportes 'aprobado' con framerItemId y hace público el sitio.
-  // Modo full-auto (2026-05-05+): el grueso de los reportes los aprueba la IA
-  // sola → publish 2 veces al día equilibra "frescura del sitio" vs "no saturar
-  // a Framer con 1 deploy por noticia".
-  async function publishCronJob(label: string): Promise<void> {
-    logger.info(`[Cron] Iniciando publicación del sitio Framer (${label})...`);
-    const result = await publicarSitio();
-    if (!result) {
-      logger.error(`[Cron] Falló la publicación (${label}).`);
-      return;
-    }
-    const promovidos = await marcarPublicadosTrasPublish();
-    logger.info(`[Cron] Sitio publicado (${label}, ${result.deploymentId}). Reportes promovidos: ${promovidos}`);
-  }
-  cron.schedule('0 9 * * *', () => publishCronJob('9 AM'),
-    { timezone: 'America/Argentina/Buenos_Aires' });
-  cron.schedule('0 21 * * *', () => publishCronJob('21:00'),
-    { timezone: 'America/Argentina/Buenos_Aires' });
+  // Sprint mejoras-flujo (2026-06-30): crons 9AM/21hs de `publicarSitio()`
+  // eliminados. Eran del flow viejo (Framer Server API). Hoy el publisher
+  // Playwright postea inmediato al aprobar — no hay "publish del sitio"
+  // como paso intermedio.
 
   // Cron: backup diario de la DB a las 3:00 AM Argentina (hora de menor actividad).
   // El archivo va a backups/varone-YYYY-MM-DD.dump y se mantiene 30 días.

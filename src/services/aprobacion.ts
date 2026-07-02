@@ -329,6 +329,55 @@ const STRING_LIMITS: Partial<Record<keyof EditarPendienteInput, number>> = {
   cantidadPersonasInvolucradas: 10,
 };
 
+/**
+ * Sprint mejoras-flujo (2026-06-30): valida que los valores de los 10 campos
+ * canonical del form Framer estén dentro de sus enums. Previene el bug del
+ * publisher: si un valor no está en el dropdown real del sitio, Playwright
+ * falla y el reporte queda en `fallo_publicacion`.
+ *
+ * Retorna el nombre del campo culpable + valor rechazado, o null si todo OK.
+ */
+function validarValoresCanonical(
+  data: Record<string, string | null>,
+): { field: string; value: string; options: readonly string[] } | null {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const {
+    PROVINCIAS_AR,
+    TIPOS_INCIDENTE_FRAMER,
+    FUERZAS_INTERVINIENTES,
+    TIPOS_VEHICULO,
+    CARGAS_TRANSPORTADAS,
+    MODUS_OPERANDI,
+    HUBO_VIOLENCIA,
+    TIPOS_VEHICULO_INVOLUCRADO,
+    CANTIDADES_VEHICULOS,
+    CANTIDADES_PERSONAS,
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+  } = require('../config/enums-framer') as typeof import('../config/enums-framer');
+
+  const checks: Array<[keyof typeof data, readonly string[]]> = [
+    ['provincia', PROVINCIAS_AR],
+    ['tipoIncidenteFramer', TIPOS_INCIDENTE_FRAMER],
+    ['fuerzaInterviniente', FUERZAS_INTERVINIENTES],
+    ['tipoVehiculo', TIPOS_VEHICULO],
+    ['cargaTransportada', CARGAS_TRANSPORTADAS],
+    ['modusOperandi', MODUS_OPERANDI],
+    ['huboViolencia', HUBO_VIOLENCIA],
+    ['tipoVehiculoInvolucrado', TIPOS_VEHICULO_INVOLUCRADO],
+    ['cantidadVehiculosInvolucrados', CANTIDADES_VEHICULOS],
+    ['cantidadPersonasInvolucradas', CANTIDADES_PERSONAS],
+  ];
+
+  for (const [field, options] of checks) {
+    const value = data[field];
+    if (value == null || value === '') continue; // null/vacío es OK (queda como faltante)
+    if (!options.includes(value)) {
+      return { field: field as string, value, options };
+    }
+  }
+  return null;
+}
+
 function normalize(
   raw: EditarPendienteInput,
 ): { ok: true; data: Record<string, string | null> } | { ok: false; error: string } {
@@ -365,6 +414,18 @@ function normalize(
       return { ok: false, error: `Campo ${required} no puede quedar vacío` };
     }
   }
+
+  // Sprint mejoras-flujo (2026-06-30): validar canonical de los 10 campos Framer.
+  // Previene mismatch bug donde la IA extrae "Cisterna" (no canonical) y el
+  // publisher falla al postear al sitio público.
+  const canonicalError = validarValoresCanonical(data);
+  if (canonicalError) {
+    return {
+      ok: false,
+      error: `Valor "${canonicalError.value}" para "${canonicalError.field}" no está en las opciones canonical del sitio Framer. Opciones válidas: ${canonicalError.options.join(', ')}`,
+    };
+  }
+
   return { ok: true, data };
 }
 

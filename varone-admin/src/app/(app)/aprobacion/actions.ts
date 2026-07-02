@@ -7,7 +7,7 @@ import {
   descartarReporte,
   despublicarReporte,
   editarReporteBackend,
-  publicarSitioFramer,
+  reintentarUnReporte,
   type ReporteEditableFields,
 } from '@/lib/backend';
 
@@ -66,9 +66,19 @@ export async function completarCamposFramerAction(
   return result;
 }
 
-export async function publicarSitioAction() {
-  await requireUser();
-  const result = await publicarSitioFramer();
-  revalidatePath('/aprobacion');
-  return result;
+// Sprint mejoras-flujo (2026-06-30): publicarSitioAction eliminada.
+
+/**
+ * Sprint mejoras-flujo (2026-06-30): movido desde /errores-publicacion/actions.ts
+ * (esa página ya no existe — los errores viven en /aprobacion?estado=fallo_publicacion).
+ */
+export async function reintentarPublicacionAction(
+  id: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: 'No autenticado' };
+
+  const r = await reintentarUnReporte(id);
+  if (r.ok) revalidatePath('/aprobacion');
+  return r;
 }

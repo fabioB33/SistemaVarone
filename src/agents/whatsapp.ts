@@ -139,9 +139,13 @@ async function procesarHistorialGrupo(): Promise<void> {
     return;
   }
 
-  const grupo = chats.find(c => c.isGroup && c.name === ENV.WA_GROUP_NAME);
+  // Sprint mejoras-flujo (2026-06-30): leer group name desde config_admin
+  // en vez de ENV, así se respeta el override que Varone hizo en /configuracion.
+  const { obtenerWaGroupName } = await import('../services/config-admin');
+  const groupName = await obtenerWaGroupName();
+  const grupo = chats.find(c => c.isGroup && c.name === groupName);
   if (!grupo) {
-    logger.warn(`[WhatsApp] Grupo "${ENV.WA_GROUP_NAME}" no encontrado al reconectar.`);
+    logger.warn(`[WhatsApp] Grupo "${groupName}" no encontrado al reconectar.`);
     return;
   }
 
@@ -236,7 +240,9 @@ export function iniciarWhatsApp(): void {
     ultimaActividad = Date.now();
     conectado = true;
     cancelarInitWatchdog();
-    void setWaStateStatus('connected', 'ready', { groupName: ENV.WA_GROUP_NAME });
+    // Sprint mejoras-flujo (2026-06-30): usar config_admin en lugar de ENV
+    const { obtenerWaGroupName: obtenerWaGroupNameReady } = await import('../services/config-admin');
+    void setWaStateStatus('connected', 'ready', { groupName: await obtenerWaGroupNameReady() });
     // Cancelar timer de refresh de QR (ya no hace falta, estamos conectados)
     if (qrRefreshTimer) {
       clearTimeout(qrRefreshTimer);
@@ -265,7 +271,11 @@ export function iniciarWhatsApp(): void {
       ultimaActividad = Date.now();
       const chat = await msg.getChat();
 
-      if (!chat.isGroup || chat.name !== ENV.WA_GROUP_NAME) return;
+      // Sprint mejoras-flujo (2026-06-30): usar config_admin en vez de ENV
+      // para que el override desde /configuracion aplique sin restart.
+      const { obtenerWaGroupName: obtenerWaGroupNameMsg } = await import('../services/config-admin');
+      const groupNameActual = await obtenerWaGroupNameMsg();
+      if (!chat.isGroup || chat.name !== groupNameActual) return;
 
       // Bumpea ultimoMensajeEn en DB (lo usa el healthcheck para detectar zombies).
       // Lo hacemos antes del rate-limit/type filter porque incluso mensajes ignorados

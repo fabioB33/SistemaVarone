@@ -6,6 +6,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 import prisma from '../services/prisma';
 import { notificar } from '../services/notificaciones';
+import logger from '../services/logger';
 import {
   mutationsLimiter,
   publisherLimiter,
@@ -121,7 +122,7 @@ export function incrementarMetrica(metrica: keyof Omit<typeof pipelineMetrics, '
 export function setQrData(qr: string) {
   recibimosEventoReal = true;
   // emitirQR ya actualiza qrData y waStatus, y hace push via SSE
-  emitirQR(qr).catch(err => console.error('[Dashboard] Error emitiendo QR via SSE:', err));
+  emitirQR(qr).catch(err => logger.error('[Dashboard] Error emitiendo QR via SSE:', err));
 }
 export function setWaConnected() {
   recibimosEventoReal = true;
@@ -367,7 +368,7 @@ export function startDashboard(port: number = 3000) {
       });
       res.json({ ok: true, count: items.length, items });
     } catch (e) {
-      console.error('[Dashboard] Error listando alertas:', e);
+      logger.error('[Dashboard] Error listando alertas:', e);
       res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
     }
   });
@@ -379,13 +380,13 @@ export function startDashboard(port: number = 3000) {
       const count = await contarAlertasSinLeer();
       res.json({ ok: true, count });
     } catch (e) {
-      console.error('[Dashboard] Error contando alertas sin leer:', e);
+      logger.error('[Dashboard] Error contando alertas sin leer:', e);
       res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
     }
   });
 
   // API: marcar una alerta como vista.
-  app.post('/api/alertas/marcar-vista', async (req, res) => {
+  app.post('/api/alertas/marcar-vista', mutationsLimiter, async (req, res) => {
     try {
       const id = parseInt(String(req.body?.id), 10);
       if (!Number.isFinite(id)) {
@@ -396,19 +397,19 @@ export function startDashboard(port: number = 3000) {
       const result = await marcarAlertaVista(id);
       res.json(result);
     } catch (e) {
-      console.error('[Dashboard] Error marcando alerta vista:', e);
+      logger.error('[Dashboard] Error marcando alerta vista:', e);
       res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
     }
   });
 
   // API: marcar todas las alertas sin leer como vistas.
-  app.post('/api/alertas/marcar-todas-vistas', async (_req, res) => {
+  app.post('/api/alertas/marcar-todas-vistas', mutationsLimiter, async (_req, res) => {
     try {
       const { marcarTodasVistas } = await import('../services/alertas');
       const count = await marcarTodasVistas();
       res.json({ ok: true, marcadas: count });
     } catch (e) {
-      console.error('[Dashboard] Error marcando todas vistas:', e);
+      logger.error('[Dashboard] Error marcando todas vistas:', e);
       res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
     }
   });
@@ -418,7 +419,7 @@ export function startDashboard(port: number = 3000) {
   //  - Testing inmediato sin esperar el próximo tick del cron.
   //  - Verificar manualmente desde el panel "está todo OK".
   //  - Disparar alertas de prueba (?test=silencio|spike|pendientes-viejos|distribucion).
-  app.post('/api/health-ai/check', async (req, res) => {
+  app.post('/api/health-ai/check', mutationsLimiter, async (req, res) => {
     try {
       const test = req.query.test as string | undefined;
       if (test) {
@@ -436,7 +437,7 @@ export function startDashboard(port: number = 3000) {
       await ejecutarChequeosIA();
       res.json({ ok: true, mode: 'real', mensaje: 'Chequeos completados (ver logs)' });
     } catch (e) {
-      console.error('[Dashboard] Error en health-ai check:', e);
+      logger.error('[Dashboard] Error en health-ai check:', e);
       res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
     }
   });
@@ -456,7 +457,7 @@ export function startDashboard(port: number = 3000) {
       procesarTexto(texto, 'whatsapp');
       res.json({ ok: true, encolado: true, mensaje: 'Mensaje inyectado al pipeline' });
     } catch (error) {
-      console.error('[Dashboard] Error inyectando mensaje:', error);
+      logger.error('[Dashboard] Error inyectando mensaje:', error);
       res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   });
@@ -469,7 +470,7 @@ export function startDashboard(port: number = 3000) {
       const pendientes = await prisma.reporte.count({ where: { framerEnviado: false, framerIntentos: { lt: 5 } } });
       res.json({ ok: true, pendientesRestantes: pendientes });
     } catch (error) {
-      console.error('[Dashboard] Error en reintento manual Framer:', error);
+      logger.error('[Dashboard] Error en reintento manual Framer:', error);
       res.status(500).json({ ok: false, error: 'Error al reintentar' });
     }
   });
@@ -508,7 +509,7 @@ export function startDashboard(port: number = 3000) {
       const result = await enviarAFramer(id);
       res.json({ ok: result.ok, error: result.error });
     } catch (error) {
-      console.error('[Dashboard] Error en reintento individual Framer:', error);
+      logger.error('[Dashboard] Error en reintento individual Framer:', error);
       res.status(500).json({ ok: false, error: 'Error al reintentar' });
     }
   });
@@ -531,7 +532,7 @@ export function startDashboard(port: number = 3000) {
       const items = await listarPorEstado(estado, limit);
       res.json({ ok: true, estado, items });
     } catch (error) {
-      console.error('[Dashboard] Error listando reportes por estado:', error);
+      logger.error('[Dashboard] Error listando reportes por estado:', error);
       res.status(500).json({ ok: false, error: 'Error al listar' });
     }
   });
@@ -543,7 +544,7 @@ export function startDashboard(port: number = 3000) {
       const count = await contarPendientesRevision();
       res.json({ ok: true, count });
     } catch (error) {
-      console.error('[Dashboard] Error contando pendientes_revision:', error);
+      logger.error('[Dashboard] Error contando pendientes_revision:', error);
       res.status(500).json({ ok: false, error: 'Error al contar' });
     }
   });
@@ -554,7 +555,7 @@ export function startDashboard(port: number = 3000) {
       const count = await prisma.reporte.count({ where: { estado: 'fallo_publicacion' } });
       res.json({ ok: true, count });
     } catch (error) {
-      console.error('[Dashboard] Error contando fallos:', error);
+      logger.error('[Dashboard] Error contando fallos:', error);
       res.status(500).json({ ok: false, error: 'Error al contar' });
     }
   });
@@ -583,7 +584,7 @@ export function startDashboard(port: number = 3000) {
 
       res.json({ ok: true, count: items.length, items });
     } catch (error) {
-      console.error('[Dashboard] /api/descartados/lista:', error);
+      logger.error('[Dashboard] /api/descartados/lista:', error);
       res.status(500).json({ ok: false, error: 'Error al listar descartados' });
     }
   });
@@ -603,7 +604,7 @@ export function startDashboard(port: number = 3000) {
       ]);
       res.json({ ok: true, total, porPortal });
     } catch (error) {
-      console.error('[Dashboard] /api/descartados/count:', error);
+      logger.error('[Dashboard] /api/descartados/count:', error);
       res.status(500).json({ ok: false, error: 'Error al contar' });
     }
   });
@@ -618,7 +619,7 @@ export function startDashboard(port: number = 3000) {
       const result = await correrScraperUno(portal);
       res.json({ ok: true, ...result });
     } catch (error) {
-      console.error('[Dashboard] /api/scrapers/correr:', error);
+      logger.error('[Dashboard] /api/scrapers/correr:', error);
       res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Error' });
     }
   });
@@ -632,7 +633,7 @@ export function startDashboard(port: number = 3000) {
       const totalEnviadosAlPipeline = resultados.reduce((acc, r) => acc + r.enviadosAlPipeline, 0);
       res.json({ ok: true, totalNotas, totalEnviadosAlPipeline, portales: resultados });
     } catch (error) {
-      console.error('[Dashboard] /api/scrapers/correr-todos:', error);
+      logger.error('[Dashboard] /api/scrapers/correr-todos:', error);
       res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Error' });
     }
   });
@@ -676,7 +677,7 @@ export function startDashboard(port: number = 3000) {
           provincia: 'Buenos Aires',
           descripcion: 'Tres delincuentes asaltaron a un transportista en Ruta 9 km 102 y se llevaron un cargamento de neumáticos valuado en más de 30 millones de pesos. El chofer fue golpeado pero está estable.',
           textoOriginal: '[CRONICA] Robaron un trailer con neumáticos en Ruta 9 km 102.',
-          carga: 'Repuestos y Neumáticos',
+          carga: 'Autopartes',
         },
         {
           portal: 'la-nacion',
@@ -738,7 +739,7 @@ export function startDashboard(port: number = 3000) {
         titulo: escenario.tituloOriginal,
       });
     } catch (error) {
-      console.error('[Dashboard] /api/demo/inyectar-vivo:', error);
+      logger.error('[Dashboard] /api/demo/inyectar-vivo:', error);
       res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Error' });
     }
   });
@@ -751,7 +752,7 @@ export function startDashboard(port: number = 3000) {
       const snapshot = await obtenerConfigSnapshot();
       res.json({ ok: true, ...snapshot });
     } catch (error) {
-      console.error('[Dashboard] /api/admin/config GET:', error);
+      logger.error('[Dashboard] /api/admin/config GET:', error);
       res.status(500).json({ ok: false, error: 'Error al leer config' });
     }
   });
@@ -774,7 +775,7 @@ export function startDashboard(port: number = 3000) {
       await setPortalesActivos(activos, editorPor);
       res.json({ ok: true, activos });
     } catch (error) {
-      console.error('[Dashboard] /api/admin/config/portales POST:', error);
+      logger.error('[Dashboard] /api/admin/config/portales POST:', error);
       res.status(500).json({ ok: false, error: 'Error al guardar' });
     }
   });
@@ -792,7 +793,7 @@ export function startDashboard(port: number = 3000) {
       await setWaGroupName(groupName, editorPor);
       res.json({ ok: true, groupName, aviso: 'Reiniciá el bot desde /aprobacion para que tome el cambio.' });
     } catch (error) {
-      console.error('[Dashboard] /api/admin/config/whatsapp-group POST:', error);
+      logger.error('[Dashboard] /api/admin/config/whatsapp-group POST:', error);
       res.status(500).json({ ok: false, error: 'Error al guardar' });
     }
   });
@@ -825,7 +826,7 @@ export function startDashboard(port: number = 3000) {
       );
       res.json({ ok: true, portales });
     } catch (error) {
-      console.error('[Dashboard] /api/scrapers/status:', error);
+      logger.error('[Dashboard] /api/scrapers/status:', error);
       res.status(500).json({ ok: false, error: 'Error' });
     }
   });
@@ -862,7 +863,7 @@ export function startDashboard(port: number = 3000) {
         fuentes: { whatsapp7d, scraping7d },
       });
     } catch (error) {
-      console.error('[Dashboard] /api/dashboard/counters:', error);
+      logger.error('[Dashboard] /api/dashboard/counters:', error);
       res.status(500).json({ ok: false, error: 'Error' });
     }
   });
@@ -922,7 +923,7 @@ export function startDashboard(port: number = 3000) {
 
       res.json({ ok: true, count: items.length, items });
     } catch (error) {
-      console.error('[Dashboard] Error en /api/reportes/geo:', error);
+      logger.error('[Dashboard] Error en /api/reportes/geo:', error);
       res.status(500).json({ ok: false, error: 'Error al cargar reportes geo' });
     }
   });
@@ -934,7 +935,7 @@ export function startDashboard(port: number = 3000) {
       const stats = await statsGeocoding();
       res.json({ ok: true, ...stats });
     } catch (error) {
-      console.error('[Dashboard] Error en /api/ubicaciones/stats:', error);
+      logger.error('[Dashboard] Error en /api/ubicaciones/stats:', error);
       res.status(500).json({ ok: false, error: 'Error al cargar stats geocoding' });
     }
   });
@@ -948,7 +949,7 @@ export function startDashboard(port: number = 3000) {
       const result = await geocodingBatchCron();
       res.json({ ok: true, ...result });
     } catch (error) {
-      console.error('[Dashboard] Error en batch geocoding:', error);
+      logger.error('[Dashboard] Error en batch geocoding:', error);
       res.status(500).json({ ok: false, error: 'Error al geocodear batch' });
     }
   });
@@ -1105,7 +1106,7 @@ export function startDashboard(port: number = 3000) {
       const result = await descartar(payload.id, actor, ctxFromReq(req, 'quick-action'));
       res.json({ ok: result.ok, error: result.ok ? undefined : result.error, action: 'descartar', id: payload.id });
     } catch (error) {
-      console.error('[Dashboard] Error en quick-action:', error);
+      logger.error('[Dashboard] Error en quick-action:', error);
       res.status(500).json({ ok: false, error: 'Error procesando acción' });
     }
   });
@@ -1122,7 +1123,7 @@ export function startDashboard(port: number = 3000) {
       const result = await aprobar(id, aprobadoPor, ctxFromReq(req));
       res.json(result);
     } catch (error) {
-      console.error('[Dashboard] Error aprobando reporte:', error);
+      logger.error('[Dashboard] Error aprobando reporte:', error);
       res.status(500).json({ ok: false, error: 'Error al aprobar' });
     }
   });
@@ -1147,7 +1148,7 @@ export function startDashboard(port: number = 3000) {
       }
       res.json(result);
     } catch (error) {
-      console.error('[Dashboard] Error editando reporte:', error);
+      logger.error('[Dashboard] Error editando reporte:', error);
       res.status(500).json({ ok: false, error: 'Error al editar' });
     }
   });
@@ -1165,7 +1166,7 @@ export function startDashboard(port: number = 3000) {
       const result = await descartar(id, descartadoPor, ctxFromReq(req));
       res.json(result);
     } catch (error) {
-      console.error('[Dashboard] Error descartando reporte:', error);
+      logger.error('[Dashboard] Error descartando reporte:', error);
       res.status(500).json({ ok: false, error: 'Error al descartar' });
     }
   });
@@ -1185,42 +1186,14 @@ export function startDashboard(port: number = 3000) {
       const result = await despublicar(id, despublicadoPor, ctxFromReq(req));
       res.json(result);
     } catch (error) {
-      console.error('[Dashboard] Error despublicando reporte:', error);
+      logger.error('[Dashboard] Error despublicando reporte:', error);
       res.status(500).json({ ok: false, error: 'Error al despublicar' });
     }
   });
 
-  // API: publicar el sitio AHORA (botón manual en dashboard).
-  // Cron diario también lo dispara automáticamente.
-  app.post('/api/framer/publicar', publisherLimiter, async (req, res) => {
-    try {
-      const { publicarSitio } = await import('../services/framer');
-      const { marcarPublicadosTrasPublish } = await import('../services/aprobacion');
-      const { registrarAccion } = await import('../services/audit');
-      const ctx = ctxFromReq(req);
-      const actor = String(req.body?.actor || ENV.DASHBOARD_USER || 'dashboard');
-
-      const result = await publicarSitio();
-      if (!result) {
-        void registrarAccion({
-          evento: 'publicar.fail', actor, origen: ctx.origen,
-          ip: ctx.ip, userAgent: ctx.userAgent,
-        });
-        res.status(500).json({ ok: false, error: 'Falló publicación del sitio' });
-        return;
-      }
-      const promovidos = await marcarPublicadosTrasPublish();
-      void registrarAccion({
-        evento: 'publicar.success', actor, origen: ctx.origen,
-        ip: ctx.ip, userAgent: ctx.userAgent,
-        meta: { deploymentId: result.deploymentId, promovidos },
-      });
-      res.json({ ok: true, deploymentId: result.deploymentId, promovidos });
-    } catch (error) {
-      console.error('[Dashboard] Error publicando sitio:', error);
-      res.status(500).json({ ok: false, error: 'Error al publicar' });
-    }
-  });
+  // Sprint mejoras-flujo (2026-06-30): endpoint /api/framer/publicar eliminado.
+  // Era del flow viejo (Framer Server API). Hoy el publisher Playwright postea
+  // inmediato al aprobar via /api/aprobacion/aprobar. No hay "publish del sitio".
 
   // API: QR como imagen
   app.get('/api/qr', async (_req, res) => {
@@ -1276,7 +1249,7 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: ejecutar backup manual ahora.
-  app.post('/api/backups/run', async (_req, res) => {
+  app.post('/api/backups/run', mutationsLimiter, async (_req, res) => {
     try {
       const { ejecutarBackup } = await import('../services/backups');
       const result = await ejecutarBackup();
@@ -1470,7 +1443,7 @@ export function startDashboard(port: number = 3000) {
       res.json({ resumen: resumenTexto, cached: false });
     } catch (error) {
       resumenEnProgreso = false;
-      console.error('[Dashboard] Error generando resumen diario:', error);
+      logger.error('[Dashboard] Error generando resumen diario:', error);
       res.json({ resumen: 'Error al generar resumen. Los reportes individuales están disponibles debajo.', cached: false });
     }
   });

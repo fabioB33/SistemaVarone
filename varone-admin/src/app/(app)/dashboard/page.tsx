@@ -24,10 +24,10 @@ import {
   AlertCircle,
   HelpCircle,
 } from 'lucide-react';
-import { obtenerDashboardCounters, obtenerScrapersStatus } from '@/lib/backend';
+import { obtenerDashboardCounters, obtenerScrapersStatus, obtenerConfigAdmin } from '@/lib/backend';
 import { ScrapearAhoraButton } from './scrapear-ahora-button';
 import { ReporteHoyCounter } from './reporte-hoy-counter';
-import { WhatsAppWidget } from './whatsapp-widget';
+// import { WhatsAppWidget } from './whatsapp-widget'; // eliminado — ver WaStatusPanel en /aprobacion
 
 export const dynamic = 'force-dynamic';
 
@@ -41,10 +41,14 @@ const PORTAL_LABELS: Record<string, string> = {
 };
 
 export default async function DashboardPage() {
-  const [counters, portales] = await Promise.all([
+  const [counters, portales, config] = await Promise.all([
     obtenerDashboardCounters(),
     obtenerScrapersStatus(),
+    obtenerConfigAdmin(),
   ]);
+  const portalesActivosCount = config
+    ? Object.values(config.portales.activos).filter(Boolean).length
+    : 6;
 
   const c = counters ?? {
     estados: { pendientes: 0, aprobados: 0, publicados: 0, descartados: 0, falloPublicacion: 0 },
@@ -68,11 +72,12 @@ export default async function DashboardPage() {
             Tu sistema escaneando WhatsApp + 6 portales policiales argentinos. Vista panorámica de la operación.
           </p>
         </div>
-        <ScrapearAhoraButton />
+        <ScrapearAhoraButton portalesActivosCount={portalesActivosCount} />
       </header>
 
-      {/* WhatsApp widget — visible al toque para que Varone sepa si el bot está vivo */}
-      <WhatsAppWidget />
+      {/* Sprint mejoras-flujo (2026-06-30): WhatsAppWidget removido del dashboard
+          para evitar duplicación con WaStatusPanel en /aprobacion. El banner
+          "next action" del layout ya avisa si el bot está caído. */}
 
       {/* Actividad hoy / esta semana */}
       <div className="grid gap-4 sm:grid-cols-3">
@@ -130,7 +135,7 @@ export default async function DashboardPage() {
             <p className="mt-1 text-2xs text-fg-muted">en el sitio</p>
           </Link>
           <Link
-            href="/errores-publicacion"
+            href="/aprobacion?estado=fallo_publicacion"
             className="rounded-lg border border-red-500/30 bg-red-500/5 p-4 transition-colors hover:bg-red-500/10"
           >
             <p className="text-2xs uppercase tracking-wide text-red-600 dark:text-red-400">Errores</p>

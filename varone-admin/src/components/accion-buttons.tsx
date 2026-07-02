@@ -7,7 +7,6 @@ import {
   aprobarAction,
   descartarAction,
   despublicarAction,
-  publicarSitioAction,
 } from '@/app/(app)/aprobacion/actions';
 import { cn } from '@/lib/utils';
 import { ConfirmDialog } from './confirm-dialog';
@@ -194,75 +193,6 @@ export function DespublicarButton({ id }: { id: number }) {
   );
 }
 
-/**
- * @deprecated Sprint flow-cleanup-legacy (2026-06-30):
- * Botón "Publicar ahora" del flow viejo (cron 9 AM hacía publish del sitio
- * entero). Hoy el publisher Playwright postea inmediato al aprobar — no
- * existe el paso intermedio "aprobado pero no publicado". Removido del
- * header de /aprobacion. Mantenido en código por compat hasta Sprint+1.
- */
-export function PublicarSitioButton({ pendientesPublicar }: { pendientesPublicar: number }) {
-  const router = useRouter();
-  const [isPending, start] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  const disabled = isPending || pendientesPublicar === 0;
-
-  return (
-    <div className="flex flex-col items-stretch gap-1.5">
-      <button
-        onClick={() =>
-          start(async () => {
-            setErr(null);
-            setMsg(null);
-            const r = await publicarSitioAction();
-            if (!r.ok) {
-              setErr(r.error || 'Error al publicar');
-              return;
-            }
-            setMsg(`Publicado · ${r.promovidos ?? 0} reportes promovidos`);
-            router.refresh();
-          })
-        }
-        disabled={disabled}
-        title={
-          pendientesPublicar === 0
-            ? 'No hay reportes aprobados pendientes de publicar'
-            : `Publicar ahora ${pendientesPublicar} reporte(s) aprobado(s)`
-        }
-        className={cn(
-          'vc-btn vc-btn-md',
-          disabled ? 'vc-btn-secondary' : 'vc-btn-primary',
-        )}
-      >
-        {isPending ? (
-          <>
-            <Loader2 className="size-4 animate-spin" />
-            Publicando…
-          </>
-        ) : (
-          <>
-            <Send className="size-4" />
-            <span>Publicar ahora</span>
-            {pendientesPublicar > 0 && (
-              <span className="inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-accent-fg/15 px-1.5 text-2xs font-semibold tabular-nums">
-                {pendientesPublicar}
-              </span>
-            )}
-          </>
-        )}
-      </button>
-      {msg && (
-        <span className="flex items-center gap-1.5 text-2xs text-ok animate-fade-in">
-          <CheckCheck className="size-3" /> {msg}
-        </span>
-      )}
-      {err && (
-        <span className="flex items-center gap-1.5 text-2xs text-danger animate-fade-in">
-          <AlertCircle className="size-3" /> {err}
-        </span>
-      )}
-    </div>
-  );
-}
+// Sprint mejoras-flujo (2026-06-30): PublicarSitioButton eliminado.
+// Era del flow viejo (cron 9 AM publish del sitio entero). Hoy el publisher
+// Playwright postea inmediato al aprobar.

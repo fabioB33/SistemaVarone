@@ -11,7 +11,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { RotateCcw, Loader2, AlertCircle } from 'lucide-react';
-import { reintentarPublicacionAction } from '@/app/(app)/errores-publicacion/actions';
+import { reintentarPublicacionAction } from '@/app/(app)/aprobacion/actions';
 import { toast } from './toast-container';
 
 export function ReintentarFalloButton({ id }: { id: number }) {

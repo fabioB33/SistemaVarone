@@ -212,22 +212,6 @@ export async function healthcheckPublisher(): Promise<{ alive: boolean; logged: 
   }
 }
 
-/**
- * @deprecated Sprint hardening 13-mejoras (2026-06-27): publicarSitio era un
- * no-op desde el pivot v2 (commit `e2a179af`) pero quedó wireada en 3 lugares
- * (cron 9 AM + cron 21:00 + endpoint POST /api/framer/publicar).
- *
- * Mantengo por compat de los callers existentes hasta el siguiente sprint donde
- * los retire también. Retorna deploymentId fake con timestamp para que
- * `marcarPublicadosTrasPublish` no rompa downstream.
- *
- * Plan de retire (TODO Sprint+1):
- *  - Remover los 2 cron.schedule en index.ts:131-134
- *  - Remover endpoint /api/framer/publicar en dashboard/server.ts:790
- *  - Remover esta función + el call a marcarPublicadosTrasPublish que se vuelve
- *    inalcanzable.
- */
-export async function publicarSitio(): Promise<{ deploymentId: string } | null> {
-  logger.warn('[Framer] publicarSitio es no-op desde v2 (form público auto-rebuilds). Retire pendiente.');
-  return { deploymentId: `noop-v2-${Date.now()}` };
-}
+// Sprint mejoras-flujo (2026-06-30): publicarSitio() eliminada.
+// Era no-op desde el pivot v2 (jun 26). Todos sus callers fueron
+// removidos en este sprint.
