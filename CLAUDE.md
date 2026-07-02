@@ -1,5 +1,11 @@
 # Sistema Varone — Road Safety Monitor
 
+> [!important] 🎯 Si sos Claude Code y es tu primera vez en este proyecto
+> **Leé [HANDOFF-NUEVO-DEV.md](./HANDOFF-NUEVO-DEV.md) ANTES de tocar nada.**
+> Ese documento tiene el contexto de negocio + los pasos para deployar
+> el sistema a un VPS con Supabase. Este `CLAUDE.md` es el contexto
+> técnico complementario.
+
 > [!danger] Reglas universales Pampa Labs OS aplicables aquí (heredadas del CLAUDE.md raíz)
 > Las **11 reglas absolutas** del CLAUDE.md raíz aplican tal cual. Las dos más críticas:
 > - **Regla #9 NO-HARDCODED:** PROHIBIDO hardcodear números WhatsApp, group IDs, prompt template, account IDs, URLs Framer prod, env vars. Schema-driven + env vars siempre.
