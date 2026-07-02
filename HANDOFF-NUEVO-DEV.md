@@ -503,6 +503,72 @@ Con Varone al lado, probar:
 
 ---
 
+## 🔎 Verificación de enums Framer (importante — correr después del deploy)
+
+Los 10 dropdowns del formulario público de `pirateriadecamiones.com.ar`
+tienen valores específicos que la IA tiene que aprender. Están hardcoded
+en `src/config/enums-framer.ts` como enums canonical.
+
+**Si el sitio cambia una opción** (ej. agregan "Cereales" a las cargas
+transportadas), los reportes con ese valor van a caer en
+`fallo_publicacion` porque el publisher no puede seleccionar una
+opción que no existe en nuestro enum.
+
+**Solución:** hay un script que compara automáticamente los enums locales
+con las opciones REALES del sitio y reporta drift:
+
+```bash
+cd products/sistema-varone/framer-publisher
+npm run extract-options
+```
+
+**Cuándo correrlo:**
+
+1. **Después del primer deploy al VPS** — verifica que el snapshot
+   canonical actual esté sincronizado (spoiler: al 30/6/2026 estaba
+   100% OK).
+2. **Cuando aparezca un reporte en `fallo_publicacion` con mensaje**
+   `"No pude seleccionar 'X' en el dropdown 'Y'"` — corré el script para
+   ver si alguna opción cambió.
+3. **Trimestralmente** como healthcheck preventivo.
+
+**Requisito:** el publisher debe tener sesión Framer válida (el script
+re-loguea automáticamente si expiró, usando `FRAMER_SITE_EMAIL` y
+`FRAMER_SITE_PASSWORD` del `.env`).
+
+**Output esperado (todo OK):**
+
+```
+✅ provincia  (24/24 matchean)
+✅ tipoIncidenteFramer  (9/9 matchean)
+...
+✅ Todos los enums locales están sincronizados con el sitio.
+```
+
+**Output cuando hay drift:**
+
+```
+⚠  cargaTransportada  (8/9 matchean)
+   ┌─ AGREGAR al enum local (opciones del sitio faltantes):
+   │  + "Cereales"
+```
+
+**Fix:** editar `src/config/enums-framer.ts`, agregar la opción faltante
+al array correspondiente, commit + deploy. Los reportes futuros van a
+usar el nuevo valor.
+
+En el VPS:
+```bash
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone exec publisher \
+  npm run extract-options
+```
+
+Exit code:
+- `0` = todos los enums sincronizados
+- `2` = drift detectado (usar en cron para alerta)
+
+---
+
 ## 🆘 Troubleshooting típico
 
 ### "El bot no se conecta al grupo aunque escaneé el QR"

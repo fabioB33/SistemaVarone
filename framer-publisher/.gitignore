@@ -7,3 +7,7 @@ data/
 
 # Scripts de smoke ad-hoc usados durante desarrollo (no son código de producción).
 smoke-*.mjs
+
+# Sprint mejoras-flujo (2026-06-30): snapshot local del extractor (no versionar,
+# regenerable con `npm run extract-options`).
+framer-real-options.json
