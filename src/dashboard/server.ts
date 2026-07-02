@@ -743,6 +743,60 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
+  // Sprint admin-config (2026-06-30): configuración editable por Varone
+  // desde el panel /configuracion. Toggle de portales + edit del WA group.
+  app.get('/api/admin/config', async (_req, res) => {
+    try {
+      const { obtenerConfigSnapshot } = await import('../services/config-admin');
+      const snapshot = await obtenerConfigSnapshot();
+      res.json({ ok: true, ...snapshot });
+    } catch (error) {
+      console.error('[Dashboard] /api/admin/config GET:', error);
+      res.status(500).json({ ok: false, error: 'Error al leer config' });
+    }
+  });
+
+  // POST setPortalesActivos — body: { activos: { clarin: true, ... }, editorPor }
+  app.post('/api/admin/config/portales', mutationsLimiter, async (req, res) => {
+    try {
+      const { setPortalesActivos, PORTALES_KEYS } = await import('../services/config-admin');
+      const activosRaw = req.body?.activos;
+      if (!activosRaw || typeof activosRaw !== 'object') {
+        res.status(400).json({ ok: false, error: 'body.activos requerido (object)' });
+        return;
+      }
+      // Filtrar solo keys canonical
+      const activos: Record<string, boolean> = {};
+      for (const k of PORTALES_KEYS) {
+        activos[k] = Boolean(activosRaw[k]);
+      }
+      const editorPor = String(req.body?.editorPor || 'anonymous');
+      await setPortalesActivos(activos, editorPor);
+      res.json({ ok: true, activos });
+    } catch (error) {
+      console.error('[Dashboard] /api/admin/config/portales POST:', error);
+      res.status(500).json({ ok: false, error: 'Error al guardar' });
+    }
+  });
+
+  // POST setWaGroupName — body: { groupName, editorPor }
+  app.post('/api/admin/config/whatsapp-group', mutationsLimiter, async (req, res) => {
+    try {
+      const { setWaGroupName } = await import('../services/config-admin');
+      const groupName = String(req.body?.groupName || '').trim();
+      if (!groupName || groupName.length < 2) {
+        res.status(400).json({ ok: false, error: 'groupName requerido (mínimo 2 chars)' });
+        return;
+      }
+      const editorPor = String(req.body?.editorPor || 'anonymous');
+      await setWaGroupName(groupName, editorPor);
+      res.json({ ok: true, groupName, aviso: 'Reiniciá el bot desde /aprobacion para que tome el cambio.' });
+    } catch (error) {
+      console.error('[Dashboard] /api/admin/config/whatsapp-group POST:', error);
+      res.status(500).json({ ok: false, error: 'Error al guardar' });
+    }
+  });
+
   // Sprint demo-readiness (2026-06-30): status de cada portal para Centro de Comando.
   app.get('/api/scrapers/status', async (_req, res) => {
     try {

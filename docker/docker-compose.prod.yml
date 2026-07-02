@@ -1,0 +1,163 @@
+# Sprint deploy-vps (2026-06-30) — docker-compose PRODUCCIÓN.
+#
+# Este compose corre en el VPS y levanta:
+#   - db: PostgreSQL 16
+#   - backend: Express + WhatsApp agent + IA + crons (:3000, interno)
+#   - admin: Next.js panel UI (:3001, interno)
+#   - publisher: Playwright form-filler (:4001, interno)
+#   - nginx-proxy: reverse proxy + Let's Encrypt HTTPS automático
+#
+# Nginx-proxy detecta los servicios automáticamente por `VIRTUAL_HOST` env
+# y genera los certificados con acme-companion.
+#
+# USO:
+#   cp .env.production.example .env
+#   editar .env con las creds reales (Gemini, Framer, etc.)
+#   docker compose -f docker/docker-compose.prod.yml -p sistema-varone up -d
+#
+# El único puerto expuesto al mundo es 80 (redirect a 443) y 443 (HTTPS).
+
+version: '3.8'
+
+services:
+  # ───────────────────────── DB PostgreSQL ─────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Backups locales para restore rápido
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ───────────────────────── Backend Express ────────────────────────
+  # Puerto :3000 SOLO expuesto en la red interna (nginx-proxy lo consume).
+  backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      NODE_ENV: production
+      FRAMER_PUBLISHER_URL: http://publisher:4001
+    volumes:
+      - wwebjs_auth:/app/.wwebjs_auth
+      - ./logs:/app/logs
+    networks:
+      - internal
+    expose:
+      - "3000"
+
+  # ───────────────────────── Admin Next.js ──────────────────────────
+  admin:
+    build:
+      context: ../varone-admin
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SISTEMA_VARONE_URL: http://backend:3000
+    restart: unless-stopped
+    depends_on:
+      - backend
+    env_file:
+      - ../varone-admin/.env
+    environment:
+      NEXT_PUBLIC_SISTEMA_VARONE_URL: http://backend:3000
+      NODE_ENV: production
+      # ─── nginx-proxy config ──────────────────────────────────────
+      # Cambiar VIRTUAL_HOST y LETSENCRYPT_HOST al dominio real del VPS.
+      VIRTUAL_HOST: ${ADMIN_DOMAIN}
+      VIRTUAL_PORT: "3001"
+      LETSENCRYPT_HOST: ${ADMIN_DOMAIN}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+    networks:
+      - internal
+      - web
+    expose:
+      - "3001"
+
+  # ─────────────────── Publisher Playwright ─────────────────────────
+  publisher:
+    build:
+      context: ../framer-publisher
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../framer-publisher/.env
+    environment:
+      NODE_ENV: production
+    volumes:
+      # Sesión Framer persistida — sobrevive restarts del container
+      - framer_session:/app/data
+    networks:
+      - internal
+    expose:
+      - "4001"
+
+  # ────────────────────── Nginx reverse proxy ───────────────────────
+  # Configuración automática: detecta VIRTUAL_HOST de otros containers y
+  # genera vhosts nginx automáticamente. Los certs de Let's Encrypt los
+  # maneja acme-companion.
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+    networks:
+      - web
+
+  acme-companion:
+    image: nginxproxy/acme-companion:latest
+    restart: unless-stopped
+    depends_on:
+      - nginx-proxy
+    environment:
+      NGINX_PROXY_CONTAINER: sistema-varone-nginx-proxy-1
+      DEFAULT_EMAIL: ${LETSENCRYPT_EMAIL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+      - acme:/etc/acme.sh
+    networks:
+      - web
+
+# ─────────────────────────── Networks ────────────────────────────────
+networks:
+  # Red interna solo para comunicación entre services (backend <-> db, etc.)
+  internal:
+  # Red expuesta a internet (solo admin + nginx-proxy están acá)
+  web:
+
+# ─────────────────────────── Volumes ─────────────────────────────────
+volumes:
+  pgdata:
+  wwebjs_auth:
+  framer_session:
+  # Certs y config de nginx-proxy
+  certs:
+  vhost:
+  html:
+  acme:

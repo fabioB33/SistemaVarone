@@ -251,3 +251,23 @@ model ScrapeDescartado {
   @@index([descartadoEn])
   @@unique([portal, url])  // evita duplicar el mismo descarte si el scraper corre 2 veces
 }
+
+// Sprint admin-config (2026-06-30) — Configuración administrada desde el panel.
+//
+// Key-value store para settings que Varone puede editar sin tocar código:
+//  - portales.activos: JSON con { clarin: true, infobae: false, ... }
+//  - portales.custom: JSON con [{ nombre, url, css_selector? }, ...] (Sprint+1)
+//  - whatsapp.group_name: string
+//  - ...
+//
+// Tabla única en lugar de N columnas para no migrar cada vez que agregamos
+// una setting nueva. Los tipos se validan al leer del código.
+model ConfigAdmin {
+  key         String   @id
+  value       Json
+  descripcion String?  // qué es esta config, para UI
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  updatedBy   String?  @map("updated_by")
+
+  @@map("config_admin")
+}

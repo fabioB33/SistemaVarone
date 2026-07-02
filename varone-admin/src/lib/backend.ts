@@ -461,3 +461,42 @@ export async function correrTodosLosScrapers(): Promise<{
     body: JSON.stringify({}),
   });
 }
+
+// ─── Sprint admin-config (2026-06-30) ─────────────────────────────────
+
+export interface ConfigAdminSnapshot {
+  portales: {
+    activos: Record<string, boolean>;
+    disponibles: string[];
+  };
+  whatsapp: {
+    groupName: string;
+    groupNameEnv: string;
+  };
+}
+
+export async function obtenerConfigAdmin(): Promise<ConfigAdminSnapshot | null> {
+  const r = await backendFetch<unknown>('/api/admin/config');
+  if (!r.ok) return null;
+  return r as unknown as ConfigAdminSnapshot;
+}
+
+export async function guardarPortalesActivos(
+  activos: Record<string, boolean>,
+  editorPor: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return backendFetch('/api/admin/config/portales', {
+    method: 'POST',
+    body: JSON.stringify({ activos, editorPor }),
+  });
+}
+
+export async function guardarWaGroupName(
+  groupName: string,
+  editorPor: string,
+): Promise<{ ok: boolean; error?: string; aviso?: string }> {
+  return backendFetch('/api/admin/config/whatsapp-group', {
+    method: 'POST',
+    body: JSON.stringify({ groupName, editorPor }),
+  });
+}

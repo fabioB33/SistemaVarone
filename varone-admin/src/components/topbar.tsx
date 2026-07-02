@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LogOut, Truck, Map as MapIcon, Inbox, Trash2, LayoutDashboard } from 'lucide-react';
+import { LogOut, Truck, Map as MapIcon, Inbox, Trash2, LayoutDashboard, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SistemaStatusWidget } from './sistema-status-widget';
 
@@ -23,6 +23,8 @@ const NAV_LINKS = [
   { href: '/mapa', label: 'Mapa', icon: MapIcon, matchPaths: ['/mapa'] },
   // Sprint scrapers-portales (2026-06-30): auditoría del pre-filtro.
   { href: '/descartados', label: 'Descartes', icon: Trash2, matchPaths: ['/descartados'] },
+  // Sprint admin-config (2026-06-30): panel de configuración para el admin.
+  { href: '/configuracion', label: 'Configuración', icon: Settings, matchPaths: ['/configuracion'] },
 ];
 
 interface Props {

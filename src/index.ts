@@ -166,6 +166,15 @@ async function main() {
     ];
     for (const { portal, schedule } of portalCronEntries) {
       cron.schedule(schedule, async () => {
+        // Sprint admin-config (2026-06-30): antes de correr, verificamos que
+        // Varone lo haya habilitado desde /configuracion. Si el toggle está
+        // en false, skip silencioso.
+        const { obtenerPortalesActivos } = await import('./services/config-admin');
+        const activos = await obtenerPortalesActivos();
+        if (!activos[portal as keyof typeof activos]) {
+          logger.info(`[Cron portal ${portal}] skip — deshabilitado por config admin`);
+          return;
+        }
         try {
           const { correrScraperUno } = await import('./agents/portales');
           await correrScraperUno(portal);
