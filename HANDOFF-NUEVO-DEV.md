@@ -115,14 +115,85 @@ Va a reemplazar el PostgreSQL local con una DB gestionada en la nube. Ventajas: 
    - `URI` — algo como: `postgresql://postgres.abcdefg:PASSWORD@aws-0-sa-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true`
    - **IMPORTANTE**: usar la modalidad **Session** o **Transaction** según lo que dice Prisma docs. Para nuestro caso funciona **Transaction Pooler** (puerto 6543) porque Prisma no usa prepared statements por default.
 
-### 1.2. Google AI Studio (Gemini API key)
+### 1.2. Google AI Studio (Gemini API key) ⚠ OBLIGATORIO
 
-Si el sistema ya viene con key funcional, saltear. Sino:
+**Sin esta key el sistema NO funciona.** La IA que clasifica cada mensaje
+del grupo de WhatsApp y cada nota scrapeada es Google Gemini. El sistema
+también soporta OpenAI como fallback pero es opcional.
 
-1. Ir a https://aistudio.google.com/apikey con la cuenta de Varone
-2. **Create API Key** → nueva
-3. Copiar el key (formato `AIzaSy...` o `AQ.Ab8...`)
-4. **Free tier** de Gemini alcanza para ~500 req/día. Con el pre-filtro que tenemos, el sistema procesa ~50-100 mensajes/día → holgura suficiente
+**Cómo generar la key:**
+
+1. Ir a https://aistudio.google.com/apikey
+2. **Iniciar sesión con la cuenta Google de Varone** (o la que él designe
+   para el proyecto — importante que sea del cliente, no del dev, así el
+   billing y los limits quedan a su nombre)
+3. Click **Create API Key** → **Create API key in new project** (o elegir
+   un proyecto existente si ya hay)
+4. Google Cloud crea el proyecto automáticamente
+5. Copiar el API key que aparece — formato:
+   - Formato viejo: `AIzaSy...` (39 chars)
+   - Formato nuevo: `AQ.Ab8...` (44+ chars)
+   - Ambos funcionan
+6. **Guardar el key en 1Password/Bitwarden inmediatamente.** Google lo
+   muestra una sola vez. Si lo perdés, hay que crear otro (los viejos
+   siguen funcionando pero no se pueden ver más).
+
+**Cómo verificar que la key funciona ANTES de deployar:**
+
+```bash
+# Test manual con curl (reemplazar TU_KEY)
+curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=TU_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"contents":[{"parts":[{"text":"Decí solo: ok"}]}]}'
+```
+
+Respuesta esperada:
+```json
+{
+  "candidates": [{
+    "content": { "parts": [{ "text": "ok" }], "role": "model" },
+    "finishReason": "STOP"
+  }],
+  "usageMetadata": { "promptTokenCount": 5, ... }
+}
+```
+
+Si retorna un `401` o `400` con `API_KEY_INVALID`, la key está mal
+copiada o no fue activada aún.
+
+**Límites del Free tier de Gemini (verificar en https://ai.google.dev/pricing):**
+
+| Métrica | Free tier |
+|---|---|
+| Requests / min | 15 |
+| Tokens input / min | 1M |
+| Requests / día | 1500 |
+
+Con el pre-filtro que tenemos, el sistema procesa **~50-100 mensajes/día
+que llegan a la IA** (el resto los descarta el pre-filtro antes). Estamos
+holgadamente adentro del free tier.
+
+**Si el sistema empieza a fallar con `429 Too Many Requests`:**
+
+El código ya tiene retries con exponential backoff (`src/services/ia.ts`).
+Si Gemini está saturado, espera 8-32 segundos entre intentos y sigue.
+No es urgente. Si pasa muy seguido:
+- Upgrade a Pay-as-you-go (~$0.075 / 1M tokens input, muy barato)
+- O configurar `OPENAI_API_KEY` en el `.env` para que use OpenAI como fallback
+
+**Dónde va la key en el sistema:**
+
+En `.env` del backend:
+```bash
+AI_PROVIDER=gemini
+GEMINI_API_KEY=AQ.Ab8RN6L...   # ← acá va la key que copiaste
+OPENAI_API_KEY=                 # opcional, dejá vacío
+```
+
+**Cuidado con el commit:** el `.env` está en `.gitignore` pero verificá
+con `git status` antes de cada commit que no aparezca. Si por error el
+key llegó al repo, revocalo desde https://aistudio.google.com/apikey y
+generá otro.
 
 ### 1.3. VPS
 
