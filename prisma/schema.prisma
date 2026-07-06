@@ -271,3 +271,47 @@ model ConfigAdmin {
 
   @@map("config_admin")
 }
+
+// Sprint portales-custom (2026-07-06) — Portales agregados por Varone desde
+// el panel /configuracion, sin necesidad de tocar código.
+//
+// Cada entry es un scraper "genérico" que usa selectores CSS configurables.
+// El sistema los carga junto con los 6 hardcoded (Clarín/Crónica/etc) al arrancar
+// el orchestrator + refresca cada N minutos por si hay cambios en DB.
+//
+// Estados operativos:
+//  - activo=true  → el cron lo scrapea cada 15h junto con los hardcoded
+//  - activo=false → se guarda pero no se ejecuta (Varone lo pausó)
+//
+// Fields:
+//  - nombre       : label human-friendly ("La Voz del Interior")
+//  - slug         : identificador URL-safe único ("la-voz-interior") — usado
+//                   como portalOrigen en Reporte + como key en el orchestrator
+//  - url          : URL de la sección policial (ej. https://www.lavoz.com.ar/sucesos/)
+//  - cardSelector : CSS que matchea los contenedores de cada nota
+//                   default: 'article, .card, .news, [class*="article"]'
+//  - linkSelector : CSS del anchor dentro de cada card (opcional, si no,
+//                   busca el primer <a href> del card)
+//  - titleSelector: CSS del título dentro de cada card (opcional, si no,
+//                   toma el text del anchor)
+//  - agregadoPor  : usuario del panel que lo agregó (para audit)
+//  - activo       : toggle desde /configuracion
+//  - ultimoScrapeOk : timestamp del último scrape con >=1 nota. Para
+//                     healthcheck ("portal roto hace 3 días")
+model PortalCustom {
+  id             Int      @id @default(autoincrement())
+  slug           String   @unique
+  nombre         String
+  url            String
+  cardSelector   String   @default("article, .card, .news, [class*='article']") @map("card_selector")
+  linkSelector   String?  @map("link_selector")
+  titleSelector  String?  @map("title_selector")
+  activo         Boolean  @default(true)
+  ultimoScrapeOk DateTime? @map("ultimo_scrape_ok")
+  agregadoPor    String   @default("varone") @map("agregado_por")
+  creadoEn       DateTime @default(now()) @map("creado_en")
+  actualizadoEn  DateTime @updatedAt @map("actualizado_en")
+
+  @@map("portales_custom")
+  @@index([activo])
+}

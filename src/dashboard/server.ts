@@ -798,6 +798,110 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
+  // ═══════════════════════════════════════════════════════════════════
+  // Sprint portales-custom (2026-07-06) — CRUD de portales agregados
+  // por Varone desde /configuracion (además de los 6 hardcoded).
+  // ═══════════════════════════════════════════════════════════════════
+
+  // GET listar portales custom
+  app.get('/api/admin/portales-custom', async (_req, res) => {
+    try {
+      const { listarPortalesCustom } = await import('../services/portales-custom');
+      const items = await listarPortalesCustom();
+      res.json({ ok: true, items });
+    } catch (error) {
+      logger.error('[Dashboard] /api/admin/portales-custom GET:', error);
+      res.status(500).json({ ok: false, error: 'Error al listar' });
+    }
+  });
+
+  // POST probar scraper genérico ANTES de guardar (preview)
+  app.post('/api/admin/portales-custom/probar', mutationsLimiter, async (req, res) => {
+    try {
+      const { probarScraperGenerico } = await import('../agents/portales/generic');
+      const cfg = {
+        slug: String(req.body?.slug || 'probar'),
+        nombre: String(req.body?.nombre || 'Probar'),
+        url: String(req.body?.url || '').trim(),
+        cardSelector: String(req.body?.cardSelector || '').trim() ||
+          "article, .card, .news, [class*='article']",
+        linkSelector: req.body?.linkSelector ? String(req.body.linkSelector).trim() : null,
+        titleSelector: req.body?.titleSelector ? String(req.body.titleSelector).trim() : null,
+      };
+      if (!cfg.url) {
+        res.status(400).json({ ok: false, error: 'url requerida' });
+        return;
+      }
+      const result = await probarScraperGenerico(cfg);
+      res.json(result);
+    } catch (error) {
+      logger.error('[Dashboard] /api/admin/portales-custom/probar POST:', error);
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Error' });
+    }
+  });
+
+  // POST crear portal custom (después de "Probar")
+  app.post('/api/admin/portales-custom', mutationsLimiter, async (req, res) => {
+    try {
+      const { crearPortalCustom } = await import('../services/portales-custom');
+      const editorPor = String(req.body?.editorPor || 'anonymous');
+      const result = await crearPortalCustom(
+        {
+          slug: String(req.body?.slug || '').trim(),
+          nombre: String(req.body?.nombre || '').trim(),
+          url: String(req.body?.url || '').trim(),
+          cardSelector: req.body?.cardSelector ? String(req.body.cardSelector).trim() : null,
+          linkSelector: req.body?.linkSelector ? String(req.body.linkSelector).trim() : null,
+          titleSelector: req.body?.titleSelector ? String(req.body.titleSelector).trim() : null,
+        },
+        editorPor,
+      );
+      if (!result.ok) {
+        res.status(400).json(result);
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      logger.error('[Dashboard] /api/admin/portales-custom POST:', error);
+      res.status(500).json({ ok: false, error: 'Error al crear' });
+    }
+  });
+
+  // PATCH toggle activo
+  app.post('/api/admin/portales-custom/:id/toggle', mutationsLimiter, async (req, res) => {
+    try {
+      const { togglePortalCustom } = await import('../services/portales-custom');
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ ok: false, error: 'id inválido' });
+        return;
+      }
+      const activo = Boolean(req.body?.activo);
+      const result = await togglePortalCustom(id, activo);
+      res.json(result);
+    } catch (error) {
+      logger.error('[Dashboard] /api/admin/portales-custom/toggle POST:', error);
+      res.status(500).json({ ok: false, error: 'Error' });
+    }
+  });
+
+  // DELETE eliminar portal custom
+  app.post('/api/admin/portales-custom/:id/eliminar', mutationsLimiter, async (req, res) => {
+    try {
+      const { eliminarPortalCustom } = await import('../services/portales-custom');
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ ok: false, error: 'id inválido' });
+        return;
+      }
+      const result = await eliminarPortalCustom(id);
+      res.json(result);
+    } catch (error) {
+      logger.error('[Dashboard] /api/admin/portales-custom/eliminar POST:', error);
+      res.status(500).json({ ok: false, error: 'Error' });
+    }
+  });
+
   // Sprint demo-readiness (2026-06-30): status de cada portal para Centro de Comando.
   app.get('/api/scrapers/status', async (_req, res) => {
     try {

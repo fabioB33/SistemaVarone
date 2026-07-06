@@ -24,9 +24,15 @@ import { infobaeScraper } from './infobae';
 import { laNacionScraper } from './la-nacion';
 import { clarinScraper } from './clarin';
 import { pagina12Scraper } from './pagina12';
+import { buildGenericScraper } from './generic';
+import { obtenerPortalesCustomActivos, marcarUltimoScrapeOk } from '../../services/portales-custom';
 import type { NotaScrapeada, PortalScraper } from './types';
 
-export const SCRAPERS: Record<string, PortalScraper> = {
+/**
+ * Scrapers HARDCODED (6 portales built-in con selectores CSS específicos escritos
+ * a mano). No cambian sin nuevo deploy.
+ */
+const SCRAPERS_HARDCODED: Record<string, PortalScraper> = {
   cronica: cronicaScraper,
   'diario-popular': diarioPopularScraper,
   infobae: infobaeScraper,
@@ -34,6 +40,48 @@ export const SCRAPERS: Record<string, PortalScraper> = {
   clarin: clarinScraper,
   pagina12: pagina12Scraper,
 };
+
+/**
+ * Cache de portales custom (agregados por Varone desde /configuracion). Se
+ * refresca cada CUSTOM_REFRESH_MS. Al hacer merge con hardcoded, dan la lista
+ * canonical de scrapers disponibles.
+ */
+let scrapersCustomCache: Record<string, PortalScraper> = {};
+let scrapersCustomLastFetch = 0;
+const CUSTOM_REFRESH_MS = 5 * 60 * 1000; // 5 min
+
+async function refrescarScrapersCustom(): Promise<void> {
+  try {
+    const activos = await obtenerPortalesCustomActivos();
+    const next: Record<string, PortalScraper> = {};
+    for (const p of activos) {
+      next[p.slug] = buildGenericScraper(p);
+    }
+    scrapersCustomCache = next;
+    scrapersCustomLastFetch = Date.now();
+    if (activos.length > 0) {
+      logger.info(`[portales/orchestrator] ${activos.length} portales custom cargados: ${activos.map((p) => p.slug).join(', ')}`);
+    }
+  } catch (err) {
+    logger.warn(`[portales/orchestrator] no se pudo refrescar portales custom: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+async function scrapersActuales(): Promise<Record<string, PortalScraper>> {
+  const stale = Date.now() - scrapersCustomLastFetch > CUSTOM_REFRESH_MS;
+  if (stale) await refrescarScrapersCustom();
+  return { ...SCRAPERS_HARDCODED, ...scrapersCustomCache };
+}
+
+/**
+ * Registry legacy usado por endpoints que necesitan la lista (ej.
+ * /api/scrapers/status muestra los 6 hardcoded como los "canonical"). Los
+ * custom se listan aparte via listarPortalesCustom.
+ */
+export const SCRAPERS: Record<string, PortalScraper> = SCRAPERS_HARDCODED;
+
+/** Slugs de portales hardcoded — usado por config-admin.ts. */
+export const PORTALES_HARDCODED_KEYS = Object.keys(SCRAPERS_HARDCODED);
 
 export interface CorridaResultado {
   portal: string;
@@ -50,13 +98,20 @@ export interface CorridaResultado {
  * Función EXPORTADA porque el endpoint admin "correr ahora" la invoca.
  */
 export async function correrScraperUno(portal: string): Promise<CorridaResultado> {
-  const scraper = SCRAPERS[portal];
+  // Sprint portales-custom (2026-07-06): resolver desde hardcoded + custom en DB.
+  const all = await scrapersActuales();
+  const scraper = all[portal];
   if (!scraper) {
-    throw new Error(`Portal desconocido: ${portal}. Válidos: ${Object.keys(SCRAPERS).join(', ')}`);
+    throw new Error(`Portal desconocido: ${portal}. Válidos: ${Object.keys(all).join(', ')}`);
   }
 
   const t0 = Date.now();
   const notas = await scraper.scrape();
+
+  // Si es custom y trajo >=1 nota → registrar ultimoScrapeOk para healthcheck.
+  if (notas.length > 0 && !SCRAPERS_HARDCODED[portal]) {
+    await marcarUltimoScrapeOk(portal);
+  }
   let pasaronPrefiltro = 0;
   let descartadosBlacklist = 0;
   let descartadosSinKeywords = 0;
@@ -106,8 +161,10 @@ export async function correrScraperUno(portal: string): Promise<CorridaResultado
  * Corre TODOS los scrapers en paralelo. Usado por el cron diario.
  */
 export async function correrTodosLosScrapers(): Promise<CorridaResultado[]> {
-  logger.info(`[portales] iniciando corrida de ${Object.keys(SCRAPERS).length} portales en paralelo`);
-  const promises = Object.keys(SCRAPERS).map((p) =>
+  // Sprint portales-custom (2026-07-06): incluir hardcoded + custom activos.
+  const all = await scrapersActuales();
+  logger.info(`[portales] iniciando corrida de ${Object.keys(all).length} portales en paralelo`);
+  const promises = Object.keys(all).map((p) =>
     correrScraperUno(p).catch((err) => {
       logger.error(`[portales/${p}] excepción no manejada: ${err instanceof Error ? err.message : err}`);
       return {

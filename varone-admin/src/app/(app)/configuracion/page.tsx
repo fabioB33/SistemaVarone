@@ -10,14 +10,18 @@
  */
 
 import { Settings } from 'lucide-react';
-import { obtenerConfigAdmin } from '@/lib/backend';
+import { obtenerConfigAdmin, listarPortalesCustom } from '@/lib/backend';
 import { PortalesForm } from './portales-form';
 import { WhatsAppForm } from './whatsapp-form';
+import { PortalesCustomForm } from './portales-custom-form';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ConfiguracionPage() {
-  const config = await obtenerConfigAdmin();
+  const [config, customs] = await Promise.all([
+    obtenerConfigAdmin(),
+    listarPortalesCustom(),
+  ]);
 
   if (!config) {
     return (
@@ -53,6 +57,9 @@ export default async function ConfiguracionPage() {
         initialActivos={config.portales.activos}
         disponibles={config.portales.disponibles}
       />
+
+      {/* Sprint portales-custom (2026-07-06): portales agregados por Varone */}
+      <PortalesCustomForm initialCustoms={customs} />
 
       <WhatsAppForm
         initialGroupName={config.whatsapp.groupName}

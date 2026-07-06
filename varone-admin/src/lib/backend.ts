@@ -503,3 +503,79 @@ export async function guardarWaGroupName(
     body: JSON.stringify({ groupName, editorPor }),
   });
 }
+
+// ─── Sprint portales-custom (2026-07-06) ──────────────────────────────
+
+export interface PortalCustomItem {
+  id: number;
+  slug: string;
+  nombre: string;
+  url: string;
+  cardSelector: string;
+  linkSelector: string | null;
+  titleSelector: string | null;
+  activo: boolean;
+  ultimoScrapeOk: string | null;
+  agregadoPor: string;
+  creadoEn: string;
+}
+
+export interface ProbarScraperResult {
+  ok: boolean;
+  cardsMatcheadas: number;
+  notasExtraidas: number;
+  primeras: Array<{ titulo: string; url: string }>;
+  error?: string;
+}
+
+export async function listarPortalesCustom(): Promise<PortalCustomItem[]> {
+  const r = await backendFetch<PortalCustomItem[]>('/api/admin/portales-custom');
+  return r.items || [];
+}
+
+export async function probarScraperCustom(cfg: {
+  url: string;
+  cardSelector?: string;
+  linkSelector?: string;
+  titleSelector?: string;
+}): Promise<ProbarScraperResult> {
+  const r = await backendFetch<unknown>('/api/admin/portales-custom/probar', {
+    method: 'POST',
+    body: JSON.stringify(cfg),
+  });
+  return r as unknown as ProbarScraperResult;
+}
+
+export async function crearPortalCustom(input: {
+  nombre: string;
+  url: string;
+  slug?: string;
+  cardSelector?: string;
+  linkSelector?: string;
+  titleSelector?: string;
+  editorPor: string;
+}): Promise<{ ok: boolean; error?: string; portal?: PortalCustomItem }> {
+  return backendFetch('/api/admin/portales-custom', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function togglePortalCustom(
+  id: number,
+  activo: boolean,
+): Promise<{ ok: boolean; error?: string }> {
+  return backendFetch(`/api/admin/portales-custom/${id}/toggle`, {
+    method: 'POST',
+    body: JSON.stringify({ activo }),
+  });
+}
+
+export async function eliminarPortalCustom(
+  id: number,
+): Promise<{ ok: boolean; error?: string }> {
+  return backendFetch(`/api/admin/portales-custom/${id}/eliminar`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
