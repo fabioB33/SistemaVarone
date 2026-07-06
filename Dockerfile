@@ -15,12 +15,13 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_CACHE_DIR=/root/.cache/puppeteer
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci --omit=dev
+RUN npx puppeteer browsers install chrome
 
 COPY prisma ./prisma
 RUN npx prisma generate

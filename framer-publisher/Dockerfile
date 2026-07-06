@@ -12,13 +12,13 @@ WORKDIR /app
 
 # Copiar package files primero para cache eficiente
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 # Copiar código
 COPY . .
 
 # El publisher escribe la sesión Framer en /app/data (persistida vía volumen)
-RUN mkdir -p /app/data && chown -R node:node /app
+RUN mkdir -p /app/data && (id -u node >/dev/null 2>&1 || useradd -m -u 1001 node) && chown -R node:node /app
 
 USER node
 

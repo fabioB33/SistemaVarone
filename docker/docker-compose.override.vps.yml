@@ -1,0 +1,25 @@
+# Override VPS Pampa Labs (82.29.61.151) - deploy standalone.
+# DB = Supabase (DATABASE_URL del .env) -> NO postgres local.
+# nginx host ocupa 80/443 -> NO nginx-proxy/acme.
+# admin en loopback 3011; nginx host reverse-proxea varone.pampalabs.com.
+services:
+  admin:
+    ports:
+      - "127.0.0.1:3011:3001"
+  backend:
+    depends_on: !reset []
+    security_opt:
+      - seccomp=unconfined
+    shm_size: "1gb"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+  publisher:
+    command: ["node", "--import", "tsx", "src/server.ts"]
+    volumes:
+      - framer_session:/app/data
+  db:
+    profiles: ["donotstart"]
+  nginx-proxy:
+    profiles: ["donotstart"]
+  acme-companion:
+    profiles: ["donotstart"]
