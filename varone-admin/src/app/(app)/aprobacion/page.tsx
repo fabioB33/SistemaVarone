@@ -16,6 +16,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { FlowExplainer } from './flow-explainer';
+import { AnalizarUrlDialog } from './analizar-url-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,6 +84,9 @@ export default async function AprobacionPage({
             "Aprobar y publicar".
           </p>
         </div>
+
+        {/* Sprint 2026-07-07: análisis manual de URL (cierra gap del scraper) */}
+        <AnalizarUrlDialog />
       </header>
 
       {/* Flow visual del estado de los reportes (Sprint flow-claridad 2026-06-30) */}

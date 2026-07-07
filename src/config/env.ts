@@ -70,14 +70,17 @@ export const ENV = {
   PREFILTRO_WHITELIST_EXTRA: process.env.PREFILTRO_WHITELIST_EXTRA || '',
   PREFILTRO_BLACKLIST_EXTRA: process.env.PREFILTRO_BLACKLIST_EXTRA || '',
 
-  // Cron expressions por portal. Default: cada 15h.
+  // Cron expressions por portal. Default: cada 3h.
+  // Sprint 2026-07-07: bajado de 15h → 3h porque las portadas de policiales rotan
+  // fuerte durante el día. Con 15h se perdían notas relevantes publicadas entre
+  // corridas (caso Infobae "banda pollo/carne" 2/7 no detectada).
   // Override por portal si Varone quiere distinta cadencia.
-  PORTAL_CRONICA_CRON:        process.env.PORTAL_CRONICA_CRON        || '0 */15 * * *',
-  PORTAL_DIARIO_POPULAR_CRON: process.env.PORTAL_DIARIO_POPULAR_CRON || '0 */15 * * *',
-  PORTAL_INFOBAE_CRON:        process.env.PORTAL_INFOBAE_CRON        || '0 */15 * * *',
-  PORTAL_LA_NACION_CRON:      process.env.PORTAL_LA_NACION_CRON      || '0 */15 * * *',
-  PORTAL_CLARIN_CRON:         process.env.PORTAL_CLARIN_CRON         || '0 */15 * * *',
-  PORTAL_PAGINA12_CRON:       process.env.PORTAL_PAGINA12_CRON       || '0 */15 * * *',
+  PORTAL_CRONICA_CRON:        process.env.PORTAL_CRONICA_CRON        || '0 */3 * * *',
+  PORTAL_DIARIO_POPULAR_CRON: process.env.PORTAL_DIARIO_POPULAR_CRON || '0 */3 * * *',
+  PORTAL_INFOBAE_CRON:        process.env.PORTAL_INFOBAE_CRON        || '0 */3 * * *',
+  PORTAL_LA_NACION_CRON:      process.env.PORTAL_LA_NACION_CRON      || '0 */3 * * *',
+  PORTAL_CLARIN_CRON:         process.env.PORTAL_CLARIN_CRON         || '0 */3 * * *',
+  PORTAL_PAGINA12_CRON:       process.env.PORTAL_PAGINA12_CRON       || '0 */3 * * *',
 
   // Toggle global para desactivar scrapers (smoke / dev / si los portales rompen).
   DISABLE_SCRAPERS: process.env.DISABLE_SCRAPERS || '',

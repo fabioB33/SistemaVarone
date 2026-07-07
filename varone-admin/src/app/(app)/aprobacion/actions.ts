@@ -3,11 +3,13 @@
 import { revalidatePath } from 'next/cache';
 import { getSession } from '@/lib/auth';
 import {
+  analizarUrlBackend,
   aprobarReporte,
   descartarReporte,
   despublicarReporte,
   editarReporteBackend,
   reintentarUnReporte,
+  type AnalizarUrlResult,
   type ReporteEditableFields,
 } from '@/lib/backend';
 
@@ -79,6 +81,30 @@ export async function reintentarPublicacionAction(
   if (!session) return { ok: false, error: 'No autenticado' };
 
   const r = await reintentarUnReporte(id);
+  if (r.ok) revalidatePath('/aprobacion');
+  return r;
+}
+
+/**
+ * Sprint 2026-07-07 — Análisis manual de URL.
+ *
+ * Contexto: el scraper cron lee solo la portada del portal, así que notas
+ * que caen fuera del top 20 (por antigüedad o por publicarse entre corridas)
+ * se pierden. Este flow permite a Varone pegar una URL de una nota puntual
+ * y forzar que pase por todo el pipeline (fetch + prefiltro + IA + dedup).
+ *
+ * Reutiliza `analizarUrlBackend` que golpea `POST /api/analizar-url`.
+ * revalidatePath('/aprobacion') refresca la lista para que Varone vea la
+ * nueva card si pasó IA + prefiltro.
+ */
+export async function analizarUrlAction(url: string): Promise<AnalizarUrlResult> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: 'No autenticado' };
+
+  const trimmed = url.trim();
+  if (!trimmed) return { ok: false, error: 'URL requerida' };
+
+  const r = await analizarUrlBackend(trimmed);
   if (r.ok) revalidatePath('/aprobacion');
   return r;
 }

@@ -215,7 +215,7 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: SSE — feed en tiempo real de mensajes del grupo de WhatsApp
-  app.get('/api/mensajes/stream', async (req, res) => {
+  app.get('/api/mensajes/stream', (req, res) => {
     const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token as string;
     if (!token || !activeSessions.has(token) || Date.now() >= (activeSessions.get(token) ?? 0)) {
       res.status(401).end();
@@ -231,7 +231,7 @@ export function startDashboard(port: number = 3000) {
     // Enviar estado inicial: wa_status + nombre del grupo + QR si está pendiente
     res.write(`event: init\ndata: ${JSON.stringify({
       waStatus,
-      grupoNombre: await (await import('../services/config-admin')).obtenerWaGroupName(),
+      grupoNombre: ENV.WA_GROUP_NAME,
     })}\n\n`);
 
     // Backfill: enviar historial de mensajes recientes para que el panel no arranque vacío
@@ -458,6 +458,83 @@ export function startDashboard(port: number = 3000) {
       res.json({ ok: true, encolado: true, mensaje: 'Mensaje inyectado al pipeline' });
     } catch (error) {
       logger.error('[Dashboard] Error inyectando mensaje:', error);
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /**
+   * Sprint 2026-07-07 — Análisis manual de URL.
+   *
+   * Cubre el gap arquitectural del scraper: los cron leen sólo la portada de
+   * cada portal, así que notas relevantes que caen fuera del top 20 (por
+   * antigüedad o por publicarse entre corridas) no se detectan. Este endpoint
+   * permite a Varone pegar una URL y forzar que la nota pase por el pipeline
+   * completo: fetch + enriquecimiento + prefiltro + IA + dedup + guardado.
+   *
+   * NO es un scraper genérico — es un forcer 1:1 sobre una URL puntual.
+   * El pipeline `procesarTexto(url, 'manual', { urlNoticia: url })` ya hace
+   * el fetch + parseo + IA + dedup, la única diferencia con inyectar-mensaje
+   * es la fuente (`'manual'`) y que exige que el input sea una URL válida.
+   */
+  app.post('/api/analizar-url', inyeccionLimiter, async (req, res) => {
+    try {
+      const url = String(req.body?.url || '').trim();
+
+      // Validación básica de URL antes de mandar al pipeline (evita spam).
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        res.status(400).json({ ok: false, error: 'URL inválida' });
+        return;
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        res.status(400).json({ ok: false, error: 'URL debe ser http o https' });
+        return;
+      }
+
+      // Chequeo temprano de duplicado por URL. Si ya existe reporte con esa
+      // URL, respondemos claramente para que la UI pueda mostrarlo (evita que
+      // Varone piense que "no pasó nada" cuando en realidad ya está cargado).
+      const existente = await prisma.reporte.findFirst({
+        where: { urlNoticia: url },
+        select: { id: true, estado: true, creadoEn: true, urlNoticia: true },
+      });
+      if (existente) {
+        res.json({
+          ok: true,
+          encolado: false,
+          duplicado: true,
+          reporte: {
+            id: existente.id,
+            estado: existente.estado,
+            urlNoticia: existente.urlNoticia,
+            creadoEn: existente.creadoEn,
+          },
+          mensaje: `Esa URL ya fue procesada (reporte #${existente.id}, estado: ${existente.estado})`,
+        });
+        return;
+      }
+
+      const { procesarTexto } = await import('../services/pipeline');
+      // procesarTexto es fire-and-forget (encola en cola FIFO del pipeline).
+      // El enriquecimiento por URL + IA + dedup + guardado ocurre async.
+      // Fuente 'scraping' porque el pipeline hace fetch de URL igual que en el
+      // flujo de scraper de portales — reusamos toda esa lógica de parseo/dedup.
+      procesarTexto(url, 'scraping', {
+        urlNoticia: url,
+        portalOrigen: `manual-${parsed.hostname}`,
+      });
+
+      logger.info(`[Dashboard] URL analizada manualmente: ${url}`);
+      res.json({
+        ok: true,
+        encolado: true,
+        duplicado: false,
+        mensaje: 'URL encolada. Si la nota es relevante aparecerá en pendientes en 10-30s.',
+      });
+    } catch (error) {
+      logger.error('[Dashboard] Error en /api/analizar-url:', error);
       res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   });
@@ -1401,7 +1478,7 @@ export function startDashboard(port: number = 3000) {
       status: statusActual,
       qr,
       cargando,
-      groupName: (await (await import('../services/config-admin')).obtenerWaGroupName()) || null,
+      groupName: ENV.WA_GROUP_NAME || null,
       pendientes: pendientesCount,
       ultimoReporteEn: ultimoReporte?.creadoEn ?? null,
       ahora: new Date().toISOString(),

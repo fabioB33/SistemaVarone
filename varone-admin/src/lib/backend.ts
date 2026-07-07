@@ -579,3 +579,29 @@ export async function eliminarPortalCustom(
     body: JSON.stringify({}),
   });
 }
+
+// ─── Sprint 2026-07-07: análisis manual de URL ──────────────────────────────
+// Cierra el gap del scraper (sólo lee portadas, se pierde notas viejas o
+// publicadas entre corridas). El input es una URL y el backend hace fetch +
+// prefiltro + IA + dedup igual que en el flujo de portales.
+
+export interface AnalizarUrlResult {
+  ok: boolean;
+  encolado?: boolean;
+  duplicado?: boolean;
+  reporte?: {
+    id: number;
+    estado: string;
+    urlNoticia: string | null;
+    creadoEn: string;
+  };
+  mensaje?: string;
+  error?: string;
+}
+
+export async function analizarUrlBackend(url: string): Promise<AnalizarUrlResult> {
+  return backendFetch<AnalizarUrlResult>('/api/analizar-url', {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  });
+}
