@@ -647,4 +647,55 @@ Si sos Claude Code leyendo este archivo por primera vez, tené presente:
 
 ---
 
-_Última actualización: 2026-06-30 (Sprint deploy-vps + admin-config)_
+---
+
+## 🐌 Troubleshooting — panel lento (documentado 2026-07-07)
+
+Si el panel admin tarda 5-10s en cada carga de `/dashboard` o `/aprobacion`, o si `/api/scrapers/status` devuelve HTTP 500 tras 10s, casi seguro el problema es que **`DATABASE_URL` tiene `connection_limit=1` en el pooler Supabase**.
+
+**Chequeo rápido** (2 min):
+
+```bash
+# 1. Ver la URL actual
+grep DATABASE_URL .env
+
+# 2. Si dice connection_limit=1 → ese es el bug
+# 3. Reemplazar con connection_limit=10&pool_timeout=15
+
+# 4. Restart backend
+docker compose -f docker/docker-compose.yml -p sistema-varone restart backend
+
+# 5. Verificar empíricamente que /counters ahora tarda <3s (era >9s)
+TOKEN=$(grep BACKEND_API_TOKEN .env | cut -d= -f2 | tr -d '"')
+curl -o /dev/null -s -w "%{time_total}s\n" \
+  -H "X-Backend-Token: $TOKEN" http://127.0.0.1:3000/api/dashboard/counters
+```
+
+**Por qué pasa esto:** `connection_limit=1` es correcto para deployments serverless (Vercel, Netlify functions) donde tenés N funciones efímeras. Pero acá el backend es single-instance persistente en docker-compose — con 1 sola conexión el pool serializa TODO `Promise.all([queries])` y multiplica latencia por N. Detalle empírico completo: [[../../docs/vault/lessons-learned/LL-2026-07-07-supabase-pooler-connection-limit-1-no-va-en-single-instance-backends]].
+
+**Cache TTL implementado desde 2026-07-07** — `src/services/ttl-cache.ts` cachea los reads pesados (dashboard counters 15s, scrapers status 60s, badges 5s). Se invalida automático al aprobar/editar/descartar/despublicar reportes. Segunda carga del dashboard: ~2ms (era ~10s).
+
+**Si necesitás bustear el cache manual desde código** (raro):
+```typescript
+import { invalidatePrefix } from '../services/ttl-cache';
+invalidatePrefix('counters:');  // bustea /api/dashboard/counters
+invalidatePrefix('badge:');     // bustea los 3 counts de badges
+```
+
+---
+
+## 📖 Feature "Analizar URL manual" (documentado 2026-07-07)
+
+En el header de `/aprobacion` hay un botón **"Analizar URL"**. Sirve para que Varone (u otros usuarios del panel) peguen una URL de nota que el scraper no detectó (por ejemplo, notas viejas fuera de la portada del portal).
+
+El backend expone `POST /api/analizar-url` con body `{ url: string }`:
+- Valida http/https.
+- Chequea dedup por `urlNoticia`.
+- Encola en el pipeline existente vía `procesarTexto(url, 'scraping', { urlNoticia, portalOrigen: 'manual-<hostname>' })`.
+- Reusa toda la lógica de fetch + prefiltro + IA + dedup + guardado.
+
+Rate-limited con `inyeccionLimiter` (60/min por default). Detalle: [[../../docs/vault/lessons-learned/LL-2026-07-07-scraper-solo-portada-pierde-notas]].
+
+---
+
+_Última actualización: 2026-07-07 (Sprint análisis-url-manual + perf-fix-connection-limit)_
