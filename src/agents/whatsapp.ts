@@ -240,9 +240,19 @@ export function iniciarWhatsApp(): void {
     ultimaActividad = Date.now();
     conectado = true;
     cancelarInitWatchdog();
-    // Sprint mejoras-flujo (2026-06-30): usar config_admin en lugar de ENV
-    const { obtenerWaGroupName: obtenerWaGroupNameReady } = await import('../services/config-admin');
-    void setWaStateStatus('connected', 'ready', { groupName: await obtenerWaGroupNameReady() });
+    // Fix QR (2026-07-06): flipear el estado a "connected" YA, sin bloquear en
+    // el lookup del nombre del grupo (query DB). Bajo carga ese await demoraba el
+    // cambio de estado del QR tras vincular. Resolvemos el grupo async y
+    // actualizamos el estado cuando esté listo.
+    void setWaStateStatus('connected', 'ready', {});
+    void (async () => {
+      try {
+        const { obtenerWaGroupName: obtenerWaGroupNameReady } = await import('../services/config-admin');
+        void setWaStateStatus('connected', 'ready', { groupName: await obtenerWaGroupNameReady() });
+      } catch (err) {
+        logger.error(`[WhatsApp] resolve group name post-ready: ${err instanceof Error ? err.message : err}`);
+      }
+    })();
     // Cancelar timer de refresh de QR (ya no hace falta, estamos conectados)
     if (qrRefreshTimer) {
       clearTimeout(qrRefreshTimer);

@@ -215,7 +215,7 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: SSE — feed en tiempo real de mensajes del grupo de WhatsApp
-  app.get('/api/mensajes/stream', (req, res) => {
+  app.get('/api/mensajes/stream', async (req, res) => {
     const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token as string;
     if (!token || !activeSessions.has(token) || Date.now() >= (activeSessions.get(token) ?? 0)) {
       res.status(401).end();
@@ -231,7 +231,7 @@ export function startDashboard(port: number = 3000) {
     // Enviar estado inicial: wa_status + nombre del grupo + QR si está pendiente
     res.write(`event: init\ndata: ${JSON.stringify({
       waStatus,
-      grupoNombre: ENV.WA_GROUP_NAME,
+      grupoNombre: await (await import('../services/config-admin')).obtenerWaGroupName(),
     })}\n\n`);
 
     // Backfill: enviar historial de mensajes recientes para que el panel no arranque vacío
@@ -1401,7 +1401,7 @@ export function startDashboard(port: number = 3000) {
       status: statusActual,
       qr,
       cargando,
-      groupName: ENV.WA_GROUP_NAME || null,
+      groupName: (await (await import('../services/config-admin')).obtenerWaGroupName()) || null,
       pendientes: pendientesCount,
       ultimoReporteEn: ultimoReporte?.creadoEn ?? null,
       ahora: new Date().toISOString(),

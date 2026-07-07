@@ -169,6 +169,31 @@ async function main() {
     }
     logger.info(`[Cron] ${portalCronEntries.length} scrapers registrados`);
 
+    // Fix #2 (2026-07-06): portales CUSTOM también entran al cron automático.
+    // Antes solo corrían con el botón "Scrapear ahora". Este cron re-consulta la
+    // DB en cada corrida (toma portales agregados después del arranque) y corre
+    // solo los activos. Schedule override por env (regla #9 NO-HARDCODED).
+    const customCron = process.env.PORTAL_CUSTOM_CRON || '0 */6 * * *';
+    cron.schedule(customCron, async () => {
+      try {
+        const { obtenerPortalesCustomActivos } = await import('./services/portales-custom');
+        const custom = await obtenerPortalesCustomActivos();
+        if (custom.length === 0) return;
+        const { correrScraperUno } = await import('./agents/portales');
+        for (const p of custom) {
+          try {
+            await correrScraperUno(p.slug);
+          } catch (err) {
+            logger.error(`[Cron portal custom ${p.slug}] ${err instanceof Error ? err.message : err}`);
+          }
+        }
+        logger.info(`[Cron] ${custom.length} portales custom scrapeados`);
+      } catch (err) {
+        logger.error(`[Cron portales custom] ${err instanceof Error ? err.message : err}`);
+      }
+    }, { timezone: 'America/Argentina/Buenos_Aires' });
+    logger.info(`[Cron] scraper de portales custom registrado (${customCron})`);
+
     // Healthcheck portales: cron diario 10 AM Argentina.
     cron.schedule('0 10 * * *', async () => {
       try {
