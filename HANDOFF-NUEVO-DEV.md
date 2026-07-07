@@ -299,7 +299,11 @@ Editar:
 
 ```bash
 # ─── Supabase (usar el POOLER, puerto 6543) ────────────────
-DATABASE_URL="postgresql://postgres.ABC:TU_PASSWORD@aws-0-sa-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+# connection_limit=10 (NO 1): con 1 el pool serializa todo Promise.all y
+# multiplica la latencia Ohio por N queries → dashboard 10s en vez de 1s.
+# Empíricamente confirmado 2026-07-07. Supabase Free permite ~200 conexiones
+# por pooler transaction mode, tenemos margen 20×.
+DATABASE_URL="postgresql://postgres.ABC:TU_PASSWORD@aws-0-sa-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=10&pool_timeout=15"
 
 # Los `POSTGRES_*` los ignoramos cuando usamos Supabase, pero dejarlos vacíos rompe docker-compose local. Poner valores dummy:
 POSTGRES_USER=unused

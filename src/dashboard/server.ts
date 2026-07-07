@@ -13,6 +13,10 @@ import {
   loginLimiter,
   inyeccionLimiter,
 } from '../middleware/rate-limit';
+// Sprint perf-fix (2026-07-07): cache TTL para reads pesados (dashboard KPIs
+// + scrapers status + badges). Latencia Supabase Ohio ~1s por query → sin
+// cache pagamos 1-10s por navegación. Con cache 5-60s stale, ~10ms hit.
+import { cached, invalidatePrefix } from '../services/ttl-cache';
 
 // Sesiones activas (token → timestamp de expiración)
 const activeSessions = new Map<string, number>();
@@ -374,10 +378,15 @@ export function startDashboard(port: number = 3000) {
   });
 
   // API: contador de alertas sin leer. Endpoint liviano para badge del topbar.
+  // Sprint perf-fix (2026-07-07): cache TTL 5s. Es un badge que el usuario
+  // mira de reojo; 5s de staleness pesa nada, y evita 1 round-trip Ohio por
+  // cada refresh de layout.
   app.get('/api/alertas/sin-leer/count', async (_req, res) => {
     try {
-      const { contarAlertasSinLeer } = await import('../services/alertas');
-      const count = await contarAlertasSinLeer();
+      const count = await cached('badge:alertas-sin-leer', 5_000, async () => {
+        const { contarAlertasSinLeer } = await import('../services/alertas');
+        return contarAlertasSinLeer();
+      });
       res.json({ ok: true, count });
     } catch (e) {
       logger.error('[Dashboard] Error contando alertas sin leer:', e);
@@ -395,6 +404,7 @@ export function startDashboard(port: number = 3000) {
       }
       const { marcarAlertaVista } = await import('../services/alertas');
       const result = await marcarAlertaVista(id);
+      invalidatePrefix('badge:alertas');
       res.json(result);
     } catch (e) {
       logger.error('[Dashboard] Error marcando alerta vista:', e);
@@ -407,6 +417,7 @@ export function startDashboard(port: number = 3000) {
     try {
       const { marcarTodasVistas } = await import('../services/alertas');
       const count = await marcarTodasVistas();
+      invalidatePrefix('badge:alertas');
       res.json({ ok: true, marcadas: count });
     } catch (e) {
       logger.error('[Dashboard] Error marcando todas vistas:', e);
@@ -615,10 +626,14 @@ export function startDashboard(port: number = 3000) {
   });
 
   // Sprint pivot-framer-form: contador para el badge de alerta del panel.
+  // Sprint perf-fix (2026-07-07): cache TTL 5s. Es un badge del sidebar,
+  // invalidado por mutations que cambian estado (aprobar/editar/descartar).
   app.get('/api/aprobacion/contar-pendientes-revision', async (_req, res) => {
     try {
-      const { contarPendientesRevision } = await import('../services/aprobacion');
-      const count = await contarPendientesRevision();
+      const count = await cached('badge:pendientes-revision', 5_000, async () => {
+        const { contarPendientesRevision } = await import('../services/aprobacion');
+        return contarPendientesRevision();
+      });
       res.json({ ok: true, count });
     } catch (error) {
       logger.error('[Dashboard] Error contando pendientes_revision:', error);
@@ -627,9 +642,12 @@ export function startDashboard(port: number = 3000) {
   });
 
   // Sprint hardening 13-mejoras (2026-06-27): contador de fallos para el badge.
+  // Sprint perf-fix (2026-07-07): cache TTL 5s idem badge de arriba.
   app.get('/api/aprobacion/contar-fallos-publicacion', async (_req, res) => {
     try {
-      const count = await prisma.reporte.count({ where: { estado: 'fallo_publicacion' } });
+      const count = await cached('badge:fallos-publicacion', 5_000, async () => {
+        return prisma.reporte.count({ where: { estado: 'fallo_publicacion' } });
+      });
       res.json({ ok: true, count });
     } catch (error) {
       logger.error('[Dashboard] Error contando fallos:', error);
@@ -980,69 +998,86 @@ export function startDashboard(port: number = 3000) {
   });
 
   // Sprint demo-readiness (2026-06-30): status de cada portal para Centro de Comando.
+  // Sprint perf-fix (2026-07-07): cache TTL 60s. Los scrapers corren cada 3h
+  // (cron), así que el status cambia lento — 60s de staleness es tolerable y
+  // evita las 18 queries por navegación (6 portales × 3 queries paralelas).
+  // Loguea también el error real (antes lo tragaba con "Error" y devolvía 500
+  // sin pista — el bug de connection_limit=1 causaba pool timeout silencioso).
   app.get('/api/scrapers/status', async (_req, res) => {
     try {
-      const { SCRAPERS } = await import('../agents/portales');
-      const desde24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const portales = await Promise.all(
-        Object.keys(SCRAPERS).map(async (portal) => {
-          const [reportes24h, descartados24h, ultimoReporte] = await Promise.all([
-            prisma.reporte.count({ where: { portalOrigen: portal, creadoEn: { gte: desde24h } } }),
-            prisma.scrapeDescartado.count({ where: { portal, descartadoEn: { gte: desde24h } } }),
-            prisma.reporte.findFirst({
-              where: { portalOrigen: portal },
-              orderBy: { creadoEn: 'desc' },
-              select: { creadoEn: true },
-            }),
-          ]);
-          const tieneActividad24h = reportes24h > 0 || descartados24h > 0;
-          const tieneAlgunaActividad = !!ultimoReporte;
-          const status: 'healthy' | 'stale' | 'unknown' = tieneActividad24h
-            ? 'healthy'
-            : tieneAlgunaActividad
-              ? 'stale'
-              : 'unknown';
-          return { portal, status, reportes24h, descartados24h, ultimoReporteEn: ultimoReporte?.creadoEn ?? null };
-        }),
-      );
-      res.json({ ok: true, portales });
+      const data = await cached('scrapers:status', 60_000, async () => {
+        const { SCRAPERS } = await import('../agents/portales');
+        const desde24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const portales = await Promise.all(
+          Object.keys(SCRAPERS).map(async (portal) => {
+            const [reportes24h, descartados24h, ultimoReporte] = await Promise.all([
+              prisma.reporte.count({ where: { portalOrigen: portal, creadoEn: { gte: desde24h } } }),
+              prisma.scrapeDescartado.count({ where: { portal, descartadoEn: { gte: desde24h } } }),
+              prisma.reporte.findFirst({
+                where: { portalOrigen: portal },
+                orderBy: { creadoEn: 'desc' },
+                select: { creadoEn: true },
+              }),
+            ]);
+            const tieneActividad24h = reportes24h > 0 || descartados24h > 0;
+            const tieneAlgunaActividad = !!ultimoReporte;
+            const status: 'healthy' | 'stale' | 'unknown' = tieneActividad24h
+              ? 'healthy'
+              : tieneAlgunaActividad
+                ? 'stale'
+                : 'unknown';
+            return { portal, status, reportes24h, descartados24h, ultimoReporteEn: ultimoReporte?.creadoEn ?? null };
+          }),
+        );
+        return { ok: true, portales };
+      });
+      res.json(data);
     } catch (error) {
-      logger.error('[Dashboard] /api/scrapers/status:', error);
-      res.status(500).json({ ok: false, error: 'Error' });
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`[Dashboard] /api/scrapers/status: ${msg}`);
+      // Devolvemos el mensaje en dev; en prod (NODE_ENV=production) sólo un genérico.
+      const isProd = ENV.NODE_ENV === 'production';
+      res.status(500).json({ ok: false, error: isProd ? 'Error' : msg });
     }
   });
 
   // Sprint demo-readiness (2026-06-30): counters para Centro de Comando.
+  // Sprint perf-fix (2026-07-07): cache TTL 15s. 10 counts × ~100ms
+  // (post connection_limit=10) ≈ 1s DB → cache hit ~5ms. Se invalida al
+  // aprobar/descartar/editar reportes desde las mutations más abajo.
   app.get('/api/dashboard/counters', async (_req, res) => {
     try {
-      const hoy = new Date();
-      hoy.setHours(0, 0, 0, 0);
-      const desde24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const desde7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const data = await cached('counters:dashboard', 15_000, async () => {
+        const hoy = new Date();
+        hoy.setHours(0, 0, 0, 0);
+        const desde24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const desde7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-      const [
-        pendientes, aprobados, publicados, descartados, falloPublicacion,
-        reportesHoy, reportesEsteSemana, descartesHoy,
-        whatsapp7d, scraping7d,
-      ] = await Promise.all([
-        prisma.reporte.count({ where: { estado: 'pendiente' } }),
-        prisma.reporte.count({ where: { estado: 'aprobado' } }),
-        prisma.reporte.count({ where: { estado: 'publicado' } }),
-        prisma.reporte.count({ where: { estado: 'descartado' } }),
-        prisma.reporte.count({ where: { estado: 'fallo_publicacion' } }),
-        prisma.reporte.count({ where: { creadoEn: { gte: hoy } } }),
-        prisma.reporte.count({ where: { creadoEn: { gte: desde7d } } }),
-        prisma.scrapeDescartado.count({ where: { descartadoEn: { gte: desde24h } } }),
-        prisma.reporte.count({ where: { fuente: 'whatsapp', creadoEn: { gte: desde7d } } }),
-        prisma.reporte.count({ where: { fuente: 'scraping', creadoEn: { gte: desde7d } } }),
-      ]);
+        const [
+          pendientes, aprobados, publicados, descartados, falloPublicacion,
+          reportesHoy, reportesEsteSemana, descartesHoy,
+          whatsapp7d, scraping7d,
+        ] = await Promise.all([
+          prisma.reporte.count({ where: { estado: 'pendiente' } }),
+          prisma.reporte.count({ where: { estado: 'aprobado' } }),
+          prisma.reporte.count({ where: { estado: 'publicado' } }),
+          prisma.reporte.count({ where: { estado: 'descartado' } }),
+          prisma.reporte.count({ where: { estado: 'fallo_publicacion' } }),
+          prisma.reporte.count({ where: { creadoEn: { gte: hoy } } }),
+          prisma.reporte.count({ where: { creadoEn: { gte: desde7d } } }),
+          prisma.scrapeDescartado.count({ where: { descartadoEn: { gte: desde24h } } }),
+          prisma.reporte.count({ where: { fuente: 'whatsapp', creadoEn: { gte: desde7d } } }),
+          prisma.reporte.count({ where: { fuente: 'scraping', creadoEn: { gte: desde7d } } }),
+        ]);
 
-      res.json({
-        ok: true,
-        estados: { pendientes, aprobados, publicados, descartados, falloPublicacion },
-        actividad: { reportesHoy, reportesEsteSemana, descartesHoy },
-        fuentes: { whatsapp7d, scraping7d },
+        return {
+          ok: true,
+          estados: { pendientes, aprobados, publicados, descartados, falloPublicacion },
+          actividad: { reportesHoy, reportesEsteSemana, descartesHoy },
+          fuentes: { whatsapp7d, scraping7d },
+        };
       });
+      res.json(data);
     } catch (error) {
       logger.error('[Dashboard] /api/dashboard/counters:', error);
       res.status(500).json({ ok: false, error: 'Error' });
@@ -1302,6 +1337,10 @@ export function startDashboard(port: number = 3000) {
       const aprobadoPor = String(req.body?.aprobadoPor || ENV.DASHBOARD_USER || 'dashboard');
       const { aprobar } = await import('../services/aprobacion');
       const result = await aprobar(id, aprobadoPor, ctxFromReq(req));
+      // Sprint perf-fix (2026-07-07): bustear cache de counters + badges
+      // para que la próxima carga del dashboard refleje el cambio.
+      invalidatePrefix('counters:');
+      invalidatePrefix('badge:');
       res.json(result);
     } catch (error) {
       logger.error('[Dashboard] Error aprobando reporte:', error);
@@ -1327,6 +1366,9 @@ export function startDashboard(port: number = 3000) {
         res.status(400).json(result);
         return;
       }
+      // Editar puede recategorizar estado → cambios en counters/badges.
+      invalidatePrefix('counters:');
+      invalidatePrefix('badge:');
       res.json(result);
     } catch (error) {
       logger.error('[Dashboard] Error editando reporte:', error);
@@ -1345,6 +1387,8 @@ export function startDashboard(port: number = 3000) {
       const descartadoPor = String(req.body?.descartadoPor || ENV.DASHBOARD_USER || 'dashboard');
       const { descartar } = await import('../services/aprobacion');
       const result = await descartar(id, descartadoPor, ctxFromReq(req));
+      invalidatePrefix('counters:');
+      invalidatePrefix('badge:');
       res.json(result);
     } catch (error) {
       logger.error('[Dashboard] Error descartando reporte:', error);
@@ -1365,6 +1409,8 @@ export function startDashboard(port: number = 3000) {
       const despublicadoPor = String(req.body?.despublicadoPor || ENV.DASHBOARD_USER || 'dashboard');
       const { despublicar } = await import('../services/aprobacion');
       const result = await despublicar(id, despublicadoPor, ctxFromReq(req));
+      invalidatePrefix('counters:');
+      invalidatePrefix('badge:');
       res.json(result);
     } catch (error) {
       logger.error('[Dashboard] Error despublicando reporte:', error);
