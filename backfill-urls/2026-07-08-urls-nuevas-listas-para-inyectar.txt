@@ -1,4 +1,4 @@
-# URLs nuevas listas para inyectar (Ronda 1+2+3 consolidada 2026-07-08)
+# URLs nuevas listas para inyectar (Ronda 1+2+3+4 consolidada 2026-07-08)
 # Dedup vs DB ya hecho.
 #
 # Ejecutar desde products/sistema-varone/:
@@ -6,7 +6,11 @@
 #
 # Cuota Gemini free tier: 20 req/día (~15 URLs útiles con margen para scrapers automáticos).
 # Con billing subís a 1500/día. Backfill completo con billing: <$1 USD one-time.
+#
+# Objetivo: la mayoría de las URLs terminan publicadas en Framer +
+# aprox 5 quedan en /aprobacion para revisión manual de Varone.
 
+https://www.infobae.com/movant/2025/09/18/la-pirateria-de-camiones-mantiene-niveles-elevados-y-muestra-picos-de-crecimiento-en-2025/
 https://www.infobae.com/sociedad/2025/09/22/un-camion-que-transportaba-carne-desabarranco-en-mendoza-los-vecinos-quisieron-llevarse-la-mercaderia-y-hubo-incidentes/
 https://www.infobae.com/sociedad/2025/10/21/ruta-7-un-camion-que-transportaba-cerdos-volco-en-chacabuco-y-los-vecinos-se-robaron-a-los-animales/
 https://www.infobae.com/sociedad/2026/04/05/video-volco-un-camion-que-llevaba-aceites-de-oliva-y-una-influencer-grabo-como-robaban-la-mercaderia/
@@ -14,6 +18,8 @@ https://www.infobae.com/sociedad/policiales/2025/09/01/motochorros-asaltaron-a-u
 https://www.infobae.com/sociedad/policiales/2025/09/02/persecucion-a-los-tiros-en-la-autopista-campora-robo-una-camioneta-choco-contra-un-camion-y-fue-detenido/
 https://www.infobae.com/sociedad/policiales/2025/09/25/desbarataron-una-banda-de-piratas-del-asfalto-en-merlo-que-habia-robado-leche-en-polvo-lista-para-exportar/
 https://www.infobae.com/sociedad/policiales/2025/09/27/desmantelaron-una-organizacion-criminal-dedicada-al-robo-y-desarme-de-camionetas-4x4/
+https://www.infobae.com/sociedad/policiales/2025/10/05/balearon-a-un-concejal-del-pro-durante-un-asalto-en-olavarria/
+https://www.infobae.com/sociedad/policiales/2025/10/12/cayo-la-banda-de-los-carniceros-infieles-en-mataderos-robaban-carne-de-un-frigorifico-para-revenderla-en-negocios-del-amba/
 https://www.infobae.com/sociedad/policiales/2025/10/16/desbarataron-una-red-de-contrabando-en-bahia-blanca-que-tenia-400-millones-en-ropa-falsa/
 https://www.infobae.com/sociedad/policiales/2025/10/21/desarticularon-una-banda-dedicada-al-robo-de-vehiculos-en-salta-y-detuvieron-a-13-personas/
 https://www.infobae.com/sociedad/policiales/2025/10/27/el-caso-de-los-empresarios-presos-por-contrabandear-toneladas-de-bronce-y-cobre-uno-tenia-usd-4-millones/
@@ -21,10 +27,12 @@ https://www.infobae.com/sociedad/policiales/2025/11/04/cayo-el-lider-de-la-banda
 https://www.infobae.com/sociedad/policiales/2025/11/13/cayo-otro-integrante-de-una-banda-que-robaba-camionetas-de-alta-gama-en-el-conurbano-y-ya-son-cuatro-los-detenidos/
 https://www.infobae.com/sociedad/policiales/2025/11/16/se-fugo-con-la-ayuda-de-un-grupo-comando-pero-no-pudo-dejar-de-robar-la-ultima-tentacion-de-un-pirata-del-asfalto/
 https://www.infobae.com/sociedad/policiales/2025/11/23/detienen-a-tres-piratas-del-asfalto-tras-una-extensa-persecucion-tenian-un-arsenal-en-el-auto/
+https://www.infobae.com/sociedad/policiales/2025/11/30/la-policia-de-la-ciudad-detuvo-a-un-sospechoso-de-robar-un-camion-de-celulares-en-ramos-mejia/
 https://www.infobae.com/sociedad/policiales/2025/12/01/cayo-una-banda-que-realizaba-entraderas-en-el-conurbano-se-sacaron-fotos-con-un-celular-robado-y-fueron-atrapados/
 https://www.infobae.com/sociedad/policiales/2025/12/01/un-chofer-dijo-que-lo-enganaron-en-la-ruta-pero-era-una-puesta-en-escena-para-quedarse-con-la-carga-del-camion-el-detalle-que-lo-delato/
 https://www.infobae.com/sociedad/policiales/2025/12/04/robaron-la-camioneta-de-un-correo-con-mercaderia-y-se-dieron-a-la-fuga-el-detalle-que-revelo-el-escondite-de-la-banda/
 https://www.infobae.com/sociedad/policiales/2025/12/05/secuestraron-a-un-chofer-en-la-plata-y-usaron-su-camion-para-seguir-con-el-raid-delictivo/
+https://www.infobae.com/sociedad/policiales/2025/12/11/temperley-balearon-en-la-nuca-a-un-comerciante-para-robarle-la-camioneta-y-una-mochila/
 https://www.infobae.com/sociedad/policiales/2025/12/15/encapuchados-y-con-armas-largas-el-video-del-violento-robo-al-deposito-de-un-supermercado-mayorista/
 https://www.infobae.com/sociedad/policiales/2025/12/29/mira-la-que-me-robe-zarpado-de-atrevido-esta-tu-marido-cayo-la-banda-que-robaba-camionetas-toyota-4x4/
 https://www.infobae.com/sociedad/policiales/2026/01/08/cinematografica-persecucion-en-general-paz-atraparon-a-dos-ladrones-con-antecedentes-que-habian-robado-una-camioneta/
@@ -32,25 +40,34 @@ https://www.infobae.com/sociedad/policiales/2026/01/14/delincuentes-ingresaron-a
 https://www.infobae.com/sociedad/policiales/2026/01/15/golpe-millonario-al-contrabando-la-trastienda-del-operativo-que-desarticulo-una-red-que-vendia-articulos-importados/
 https://www.infobae.com/sociedad/policiales/2026/01/22/incautaron-un-camion-que-transportaba-mas-de-20-toneladas-de-un-quimico-utilizado-para-elaborar-cocaina/
 https://www.infobae.com/sociedad/policiales/2026/01/25/un-transportista-fue-asesinado-a-quemarropa-durante-un-asalto-en-el-centro-de-merlo/
+https://www.infobae.com/sociedad/policiales/2026/01/28/un-grupo-de-delincuentes-hizo-un-boquete-en-el-techo-de-un-frigorifico-y-robo-carne-por-20-millones/
 https://www.infobae.com/sociedad/policiales/2026/02/07/fingieron-ser-turistas-y-atraparon-a-una-banda-de-delincuentes-que-robaban-en-la-costa/
+https://www.infobae.com/sociedad/policiales/2026/02/08/actuan-con-brutalidad-manifiesta-preocupacion-por-el-aumento-de-la-violencia-en-los-casos-de-inseguridad/
 https://www.infobae.com/sociedad/policiales/2026/02/26/isidro-casanova-motochorros-atacaron-a-balazos-al-dueno-de-un-frigorifico-y-le-robaron-la-camioneta/
 https://www.infobae.com/sociedad/policiales/2026/03/11/lo-acusan-de-robar-cuatro-countries-en-10-dias-y-de-una-casa-llevarse-usd-100-mil-lo-atraparon-con-un-arsenal/
 https://www.infobae.com/sociedad/policiales/2026/03/12/estafas-con-camionetas-de-alta-gama-las-alquilaban-en-caba-no-las-devolvian-y-las-encontraron-en-bolivia/
+https://www.infobae.com/sociedad/policiales/2026/03/13/quilmes-robaron-mas-20-millones-en-un-comercio-mayorista-en-menos-de-2-minutos-y-los-detuvieron/
 https://www.infobae.com/sociedad/policiales/2026/03/18/la-caida-de-los-ladrones-que-simulaban-ser-policias-para-cometer-robos-y-entraderas-en-zona-norte/
 https://www.infobae.com/sociedad/policiales/2026/04/02/asaltaban-camiones-detenidos-en-las-rutas-y-se-llevaban-la-mercaderia-desde-alfajores-hasta-aires-acondicionados/
 https://www.infobae.com/sociedad/policiales/2026/04/04/desarticularon-una-red-de-contrabando-millonaria-encontraron-cigarrillos-electrodomesticos-y-neumaticos/
+https://www.infobae.com/sociedad/policiales/2026/04/15/cayo-una-banda-que-robo-casi-25-millones-en-una-entradera-el-asalto-fue-coordinado-desde-penales-bonaerenses/
 https://www.infobae.com/sociedad/policiales/2026/04/25/desmantelaron-una-distribuidora-clandestina-de-alimentos-adulterados-en-los-cardales-un-detenido/
 https://www.infobae.com/sociedad/policiales/2026/04/26/robo-comando-en-un-deposito-de-lanus-se-hicieron-pasar-por-policias-y-robaron-20-millones/
+https://www.infobae.com/sociedad/policiales/2026/04/29/unas-ganas-de-hacer-plata-asi-cayo-la-banda-que-robaba-techos-de-autos-en-el-conurbano-para-revenderlos/
 https://www.infobae.com/sociedad/policiales/2026/05/13/robaban-camionetas-de-alta-gama-y-cayeron-por-el-pago-de-un-turno-en-un-hotel-alojamiento/
 https://www.infobae.com/sociedad/policiales/2026/05/17/video-robaron-un-camion-en-vaca-muerta-quedaron-filmados-y-la-empresa-ofrece-2-millones-de-recompensa/
 https://www.infobae.com/sociedad/policiales/2026/05/19/pesadilla-en-la-matanza-volvia-de-su-trabajo-se-resistio-al-robo-de-su-camioneta-y-lo-balearon/
 https://www.infobae.com/sociedad/policiales/2026/05/20/desbarataron-una-red-de-clinicas-ilegales-en-la-matanza-29-detenidos-y-una-pista-que-apunta-a-la-pirateria-del-asfalto/
+https://www.infobae.com/sociedad/policiales/2026/05/23/violenta-entradera-en-avellaneda-maniataron-a-un-hombre-lo-desvalijaron-y-un-detalle-clave-permitio-identificarlos/
 https://www.infobae.com/sociedad/policiales/2026/06/02/los-ataques-a-choferes-en-la-matanza-no-paran-un-dramatico-nuevo-crimen-y-cuatro-detenidos-por-una-ola-de-robos/
+https://www.infobae.com/sociedad/policiales/2026/06/03/buscaban-a-tres-motochorros-que-robaron-una-camioneta-y-encontraron-un-desarmadero-clandestino-en-la-matanza/
 https://www.infobae.com/sociedad/policiales/2026/06/10/cayo-una-banda-que-realizaba-entraderas-en-quilmes-tras-una-extensa-persecucion-policial-por-dos-municipios/
+https://www.infobae.com/sociedad/policiales/2026/06/12/atraparon-a-un-joven-delincuente-que-participo-de-cuatro-robos-en-tan-solo-dos-semanas-en-pilar/
 https://www.infobae.com/sociedad/policiales/2026/06/22/golpe-comando-en-plena-ruta-en-chubut-balearon-a-un-camionero-lo-secuestraron-y-le-robaron-mas-de-43-millones/
 https://www.infobae.com/sociedad/policiales/2026/06/26/nueva-ola-de-robos-a-choferes-de-aplicacion-en-la-matanza-quien-es-el-veterano-ladron-detras-de-la-banda-de-la-villa-san-petersburgo/
 https://www.infobae.com/sociedad/policiales/2026/07/02/desmantelaron-una-banda-que-se-dedicaba-a-la-compra-y-venta-de-autopartes-robadas-en-el-sur-del-conurbano/
 https://www.infobae.com/sociedad/policiales/2026/07/07/le-robaron-la-camioneta-al-primo-de-gonzalo-pipita-higuain-el-detalle-que-permitio-capturar-a-los-delincuentes/
+https://www.lanacion.com.ar/seguridad/bajo-55-por-ciento-el-robo-de-vehiculos-en-las-calles-de-la-ciudad-de-buenos-aires-nid19102025/
 https://www.lanacion.com.ar/seguridad/contrabando-golpe-a-una-red-que-comercializaba-mercaderia-que-habia-obtenido-en-forma-ilegal-en-la-nid19122025/
 https://www.lanacion.com.ar/seguridad/de-la-fuga-a-los-tiros-al-celular-olvidado-como-cayo-la-banda-que-robo-una-financiera-simulando-ser-nid17122025/
 https://www.lanacion.com.ar/seguridad/desarticularon-una-banda-dedicada-al-contrabando-y-secuestraron-mercaderia-valuada-en-1500-millones-nid08062026/

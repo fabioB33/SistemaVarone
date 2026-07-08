@@ -28,36 +28,40 @@ Para procesar todo de una vez, activar billing en https://aistudio.google.com/ap
 
 ## Archivos disponibles
 
-### `2026-07-08-urls-nuevas-listas-para-inyectar.txt` (55 URLs)
+### `2026-07-08-urls-nuevas-listas-para-inyectar.txt` (69 URLs)
 
-Recolectadas vía WebSearch (Anthropic tool) el 2026-07-08 en 3 rondas de queries. Cobertura por mes:
+Recolectadas vía WebSearch (Anthropic tool) el 2026-07-08 en 4 rondas de queries (~30 queries totales). Cobertura por mes:
 
 | Mes | URLs |
 |---|---:|
-| 2025-08 | 0 ⚠️ (sin cobertura mediática en el nicho ese mes) |
-| 2025-09 | 7 |
-| 2025-10 | 4 |
-| 2025-11 | 4 |
-| 2025-12 | 8 |
-| 2026-01 | 5 |
-| 2026-02 | 2 |
-| 2026-03 | 3 |
-| 2026-04 | 5 |
-| 2026-05 | 9 |
-| 2026-06 | 5 |
+| 2025-08 | 0 ⚠️ (empíricamente vacío — sin cobertura mediática del nicho ese mes) |
+| 2025-09 | 8 |
+| 2025-10 | 7 |
+| 2025-11 | 5 |
+| 2025-12 | 9 |
+| 2026-01 | 6 |
+| 2026-02 | 3 |
+| 2026-03 | 4 |
+| 2026-04 | 7 |
+| 2026-05 | 10 |
+| 2026-06 | 7 |
 | 2026-07 | 3 |
 
+**Total: 69 URLs**
+
 Fuentes empíricas:
-- **Infobae**: 47 URLs (fuente principal, formato `/sociedad/policiales/YYYY/MM/DD/slug/` + algunas de `/sociedad/YYYY/MM/DD/slug/` para volcados y saqueos).
-- **La Nación**: 8 URLs (formato `/seguridad/slug-nidDDMMYYYY/`).
+- **Infobae**: mayoría (secciones `/sociedad/policiales/YYYY/MM/DD/`, `/sociedad/YYYY/MM/DD/` para volcados/saqueos, y `/movant/YYYY/MM/DD/` para análisis del sector transporte).
+- **La Nación**: complemento (formato `/seguridad/slug-nidDDMMYYYY/`).
 
 Portales que NO funcionaron para WebSearch:
 - **Clarín**: bloqueado (HTTP 400) para el user agent de Anthropic.
 - **Crónica, Diario Popular, Página 12**: no tienen URLs relevantes del nicho en el rango solicitado.
 
 Dedup contra DB al momento de recolección:
-- 55 nuevas
+- 69 nuevas
 - 2 duplicadas (ya en `reportes` desde sesiones anteriores)
+
+**Objetivo operativo del backfill:** la mayoría de las URLs terminan publicadas automáticamente en Framer (`pirateriadecamiones.com.ar`) + aprox 5 quedan en `/aprobacion` para revisión manual por Varone (falsos positivos del IA o incidentes que necesitan validación humana).
 
 ## Cuándo agregar más archivos
 
