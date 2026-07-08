@@ -1,0 +1,17 @@
+# Archivo de trabajo para batch inject de URLs manuales.
+#
+# Reglas:
+#   - Una URL por línea.
+#   - Líneas vacías se ignoran.
+#   - Líneas que empiezan con # son comentarios (se ignoran).
+#
+# Uso:
+#   1. Editar este archivo (nano urls-para-analizar.txt) y pegar tus URLs.
+#   2. Correr: ./scripts/analizar-batch.sh
+#
+# Ejemplos (borrar antes de usar):
+#
+# https://www.infobae.com/sociedad/policiales/2025/09/12/atraparon-a-tres-piratas-del-asfalto.../
+# https://www.lanacion.com.ar/seguridad/2025/10/15/asaltaron-un-camion-con-mercaderia.../
+# https://www.clarin.com/policiales/2025/11/20/desbarataron-una-banda-piratas-del-asfalto.../
+
