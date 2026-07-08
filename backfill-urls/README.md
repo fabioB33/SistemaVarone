@@ -28,34 +28,35 @@ Para procesar todo de una vez, activar billing en https://aistudio.google.com/ap
 
 ## Archivos disponibles
 
-### `2026-07-08-urls-nuevas-listas-para-inyectar.txt` (37 URLs)
+### `2026-07-08-urls-nuevas-listas-para-inyectar.txt` (55 URLs)
 
-Recolectadas vía WebSearch (Anthropic tool) el 2026-07-08. Cobertura por mes:
+Recolectadas vía WebSearch (Anthropic tool) el 2026-07-08 en 3 rondas de queries. Cobertura por mes:
 
 | Mes | URLs |
 |---|---:|
-| 2025-09 | 5 |
-| 2025-10 | 3 |
+| 2025-08 | 0 ⚠️ (sin cobertura mediática en el nicho ese mes) |
+| 2025-09 | 7 |
+| 2025-10 | 4 |
 | 2025-11 | 4 |
-| 2025-12 | 4 |
-| 2026-01 | 4 |
-| 2026-02 | 1 |
-| 2026-03 | 2 |
-| 2026-04 | 3 |
-| 2026-05 | 5 |
-| 2026-06 | 4 |
-| 2026-07 | 2 |
+| 2025-12 | 8 |
+| 2026-01 | 5 |
+| 2026-02 | 2 |
+| 2026-03 | 3 |
+| 2026-04 | 5 |
+| 2026-05 | 9 |
+| 2026-06 | 5 |
+| 2026-07 | 3 |
 
 Fuentes empíricas:
-- **Infobae**: 33 URLs (fuente principal, formato `/sociedad/policiales/YYYY/MM/DD/slug/`)
-- **La Nación**: 4 URLs (formato `/seguridad/slug-nidDDMMYYYY/`)
+- **Infobae**: 47 URLs (fuente principal, formato `/sociedad/policiales/YYYY/MM/DD/slug/` + algunas de `/sociedad/YYYY/MM/DD/slug/` para volcados y saqueos).
+- **La Nación**: 8 URLs (formato `/seguridad/slug-nidDDMMYYYY/`).
 
 Portales que NO funcionaron para WebSearch:
 - **Clarín**: bloqueado (HTTP 400) para el user agent de Anthropic.
 - **Crónica, Diario Popular, Página 12**: no tienen URLs relevantes del nicho en el rango solicitado.
 
 Dedup contra DB al momento de recolección:
-- 37 nuevas
+- 55 nuevas
 - 2 duplicadas (ya en `reportes` desde sesiones anteriores)
 
 ## Cuándo agregar más archivos
