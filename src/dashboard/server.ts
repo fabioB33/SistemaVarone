@@ -1495,6 +1495,7 @@ export function startDashboard(port: number = 3000) {
   // el boot. Una vez que llega el primer evento real, el flag se queda en false.
   app.get('/api/wa/status', async (_req, res) => {
     const { getWaStatePersisted } = await import('../services/wa-state');
+    const { obtenerWaGroupName } = await import('../services/config-admin');
 
     let statusActual: 'connected' | 'qr' | 'disconnected' = waStatus;
     let qrSource: string | null = qrData;
@@ -1512,19 +1513,24 @@ export function startDashboard(port: number = 3000) {
       }
     }
 
+    // Sprint 2026-07-08: groupName DINÁMICO del DB (con fallback a env vía
+    // obtenerWaGroupName). Antes leía `ENV.WA_GROUP_NAME` directo, violando
+    // regla #9 NO-HARDCODED — cuando Varone cambiaba el nombre del grupo
+    // desde /configuracion, el panel seguía mostrando el default del .env.
     const qr = qrSource ? await QRCode.toDataURL(qrSource, { width: 300 }) : null;
-    const pendientesCount = await prisma.reporte
-      .count({ where: { estado: 'pendiente' } })
-      .catch(() => 0);
-    const ultimoReporte = await prisma.reporte
-      .findFirst({ orderBy: { creadoEn: 'desc' }, select: { creadoEn: true } })
-      .catch(() => null);
+    const [pendientesCount, ultimoReporte, groupNameActual] = await Promise.all([
+      prisma.reporte.count({ where: { estado: 'pendiente' } }).catch(() => 0),
+      prisma.reporte
+        .findFirst({ orderBy: { creadoEn: 'desc' }, select: { creadoEn: true } })
+        .catch(() => null),
+      obtenerWaGroupName().catch(() => ENV.WA_GROUP_NAME || ''),
+    ]);
 
     res.json({
       status: statusActual,
       qr,
       cargando,
-      groupName: ENV.WA_GROUP_NAME || null,
+      groupName: groupNameActual || null,
       pendientes: pendientesCount,
       ultimoReporteEn: ultimoReporte?.creadoEn ?? null,
       ahora: new Date().toISOString(),

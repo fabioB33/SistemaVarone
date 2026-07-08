@@ -21,6 +21,12 @@ export function WaStatusPanel() {
   const router = useRouter();
   const [data, setData] = useState<(WaStatus & { backendDown?: boolean }) | null>(null);
   const [loading, setLoading] = useState(true);
+  // Sprint 2026-07-08: `refreshing` distinto de `loading` — sirve para
+  // mostrar spinner en el botón refresh sin borrar el snapshot actual.
+  const [refreshing, setRefreshing] = useState(false);
+  // Timestamp del último fetch exitoso — muestra "hace X seg" en el header
+  // para que el usuario vea si el polling se congeló.
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   // Espejo del status actual fuera del closure del useEffect — ASÍ el polling
   // siempre lee el último valor para decidir el intervalo (sin esto el closure
@@ -29,6 +35,9 @@ export function WaStatusPanel() {
   // Flag para detectar transiciones (qr → connected) y refrescar el resto
   // del panel cuando el bot recién se conecta.
   const wasConnectedRef = useRef(false);
+  // Ref al tick() actual — usado por el listener de visibilitychange para
+  // disparar refetch inmediato cuando el tab vuelve a estar visible.
+  const tickRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +49,7 @@ export function WaStatusPanel() {
         if (!cancelled && r.ok) {
           const j = (await r.json()) as WaStatus & { backendDown?: boolean };
           setData(j);
+          setLastUpdatedAt(Date.now());
           statusRef.current = j.status;
           // Transición a "connected": refrescar Server Components para
           // traer reportes nuevos y métricas frescas.
@@ -51,36 +61,70 @@ export function WaStatusPanel() {
           }
         }
       } catch {
-        // ignorar
+        // ignorar — el timer sigue corriendo, el próximo tick reintenta
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
       if (cancelled) return;
       const interval = statusRef.current === 'connected' ? POLL_SLOW_MS : POLL_FAST_MS;
       timer = setTimeout(tick, interval);
     }
 
+    tickRef.current = tick;
     tick();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      tickRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
+  // Sprint 2026-07-08: refetch inmediato al volver el tab visible.
+  // Los browsers throttean o suspenden setTimeout cuando el tab está en
+  // background largo rato → el snapshot en pantalla queda frío. Este
+  // listener dispara un tick apenas el usuario vuelve al panel.
+  useEffect(() => {
+    function onVisibility() {
+      if (document.visibilityState === 'visible' && tickRef.current) {
+        setRefreshing(true);
+        // No forzamos setRefreshKey — el timer del useEffect actual sigue
+        // vivo; solo pedimos un tick extra ahora. Si estaba durmiendo por
+        // throttle, el navegador resume el timer solo.
+        void tickRef.current();
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
+  function handleManualRefresh() {
+    setRefreshing(true);
+    setRefreshKey((k) => k + 1);
+  }
+
   return (
     <aside className="space-y-3">
-      <header className="flex items-center justify-between">
-        <h2 className="text-2xs font-semibold uppercase tracking-[0.18em] text-fg-muted">
-          Estado del bot
-        </h2>
+      <header className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="text-2xs font-semibold uppercase tracking-[0.18em] text-fg-muted">
+            Estado del bot
+          </h2>
+          {lastUpdatedAt && (
+            <LastUpdated at={lastUpdatedAt} />
+          )}
+        </div>
         <button
-          onClick={() => setRefreshKey((k) => k + 1)}
+          onClick={handleManualRefresh}
           className="vc-btn vc-btn-ghost vc-btn-sm"
           aria-label="Refrescar estado"
           title="Refrescar ahora"
+          disabled={refreshing}
         >
-          <RefreshCw className={cn('size-3', loading && 'animate-spin')} />
+          <RefreshCw className={cn('size-3', (loading || refreshing) && 'animate-spin')} />
         </button>
       </header>
 
@@ -294,5 +338,40 @@ function Stat({
         {value}
       </div>
     </div>
+  );
+}
+
+/**
+ * Sprint 2026-07-08: indicador "hace X seg / min" que se actualiza cada 5s
+ * mientras el componente esté montado. Sirve para detectar visualmente si
+ * el polling se congeló (ej: tab en background). Si dice "hace 4 min" y el
+ * status muestra "Conectado", casi seguro es un snapshot frío.
+ */
+function LastUpdated({ at }: { at: number }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 5_000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.max(0, Math.floor((Date.now() - at) / 1000));
+  const label =
+    secs < 5 ? 'ahora' :
+    secs < 60 ? `hace ${secs} s` :
+    secs < 3600 ? `hace ${Math.floor(secs / 60)} min` :
+    `hace ${Math.floor(secs / 3600)} h`;
+  // Warn si hace >90s (el polling normal debería ser cada 3s o 30s, si pasa
+  // 1 min con 30s de gracia significa que algo se congeló).
+  const stale = secs > 90;
+  return (
+    <p
+      className={cn(
+        'text-2xs mt-0.5',
+        stale ? 'text-warn' : 'text-fg-subtle',
+      )}
+      title={new Date(at).toLocaleString()}
+    >
+      Actualizado {label}
+      {stale && ' — refrescá manualmente'}
+    </p>
   );
 }
