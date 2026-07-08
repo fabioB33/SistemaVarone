@@ -25,16 +25,81 @@ interface GeocodeResult {
 }
 
 /**
+ * Sprint 2026-07-08 (fix mapa) — Palabras "vacías" que la IA a veces guarda
+ * como string literal en vez de null. Si aparecen en la query, Nominatim
+ * no encuentra nada porque busca la frase completa.
+ *
+ * Bug empírico detectado: reporte #4 tenía `ruta: "no especificada"` y la
+ * query enviada fue "Lomas de Zamora, no especificada, Buenos Aires,
+ * Argentina" → not_found. Sin el "no especificada" el mismo Nominatim
+ * resuelve perfectamente.
+ */
+const RUIDO_UBICACION = new Set([
+  'no especificada',
+  'no especificado',
+  'sin datos',
+  'sin especificar',
+  'sin ruta',
+  'ninguna',
+  'ninguno',
+  'no aplica',
+  'na',
+  'n/a',
+  '-',
+  '—',
+]);
+
+function esValor(v: string | null | undefined): v is string {
+  if (!v) return false;
+  const norm = v.trim().toLowerCase();
+  if (!norm) return false;
+  return !RUIDO_UBICACION.has(norm);
+}
+
+/**
  * Construye la query de búsqueda con la mejor info disponible.
  * Argentina-bias: incluye "Argentina" para evitar matches en España u otros.
+ *
+ * Sprint 2026-07-08 (fix Bug 1): filtra strings de ruido como
+ * "no especificada" que la IA a veces guarda como string literal.
  */
 export function buildQuery(ubicacion: string, ruta: string | null, provincia: string | null): string {
   const parts: string[] = [];
-  if (ubicacion) parts.push(ubicacion);
-  if (ruta) parts.push(ruta);
-  if (provincia) parts.push(provincia);
+  if (esValor(ubicacion)) parts.push(ubicacion.trim());
+  if (esValor(ruta)) parts.push((ruta as string).trim());
+  if (esValor(provincia)) parts.push((provincia as string).trim());
   parts.push('Argentina');
-  return parts.filter(Boolean).join(', ');
+  return parts.join(', ');
+}
+
+/**
+ * Sprint 2026-07-08 (fix Bug 3) — Simplifica ubicaciones compuestas para
+ * fallback cuando Nominatim rechaza la forma completa. Devuelve la primera
+ * localidad válida del string.
+ *
+ * Ejemplos:
+ *  "Azul, Saladillo, Olavarría, Hinojo, Chillar" → "Azul"
+ *  "Luján de Cuyo / Perdriel" → "Luján de Cuyo"
+ *  "Olavarría, barrio Independencia" → "Olavarría"
+ *  "Isidro Casanova, La Matanza" → "Isidro Casanova"
+ *  "Lomas de Zamora" → "Lomas de Zamora" (sin cambio)
+ *
+ * Retorna null si la ubicación simplificada es igual a la original (no
+ * hay simplificación posible, no vale intentar de nuevo).
+ */
+export function simplificarUbicacion(ubicacion: string): string | null {
+  if (!ubicacion) return null;
+  // Separadores comunes: coma, barra, guión largo, punto y coma
+  const primerCorte = ubicacion.split(/[,/;–—-]/)[0]?.trim();
+  if (!primerCorte) return null;
+  // Descartar palabras de contexto como "barrio", "km", "cerca de"
+  const sinContexto = primerCorte
+    .replace(/^(barrio|localidad|zona|paraje|cerca de|frente a)\s+/i, '')
+    .trim();
+  const resultado = sinContexto || primerCorte;
+  // Solo devolver si es distinta y tiene al menos 3 chars (evitar "Km 22" solo)
+  if (resultado === ubicacion.trim() || resultado.length < 3) return null;
+  return resultado;
 }
 
 /**
@@ -103,7 +168,27 @@ export async function resolverCoordenadas(
   // Cache miss — geocodear
   const query = buildQuery(ubicacion, ruta, provincia);
   try {
-    const result = await geocodearNominatim(query);
+    let result = await geocodearNominatim(query);
+
+    // Sprint 2026-07-08 (fix Bug 3): 2 fallbacks progresivos si Nominatim
+    // rechaza la query completa (que a veces trae ruta específica con km o
+    // calles que no puede interpretar):
+    //  1) Sin ruta: solo "Ubicacion + Provincia + Argentina".
+    //  2) Con ubicación simplificada: primera localidad del string compuesto.
+    if (!result && esValor(ruta)) {
+      const querySinRuta = buildQuery(ubicacion, null, provincia);
+      logger.info(`[Geocoder] fallback sin ruta: "${querySinRuta}"`);
+      result = await geocodearNominatim(querySinRuta);
+    }
+    if (!result) {
+      const simplificada = simplificarUbicacion(ubicacion);
+      if (simplificada) {
+        const queryFallback = buildQuery(simplificada, null, provincia);
+        logger.info(`[Geocoder] fallback ubicación simplificada: "${queryFallback}"`);
+        result = await geocodearNominatim(queryFallback);
+      }
+    }
+
     if (!result) {
       await prisma.ubicacionGeocoded.create({
         data: { ubicacion, notFound: true, provider: 'nominatim' },
