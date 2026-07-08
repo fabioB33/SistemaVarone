@@ -42,10 +42,19 @@ interface Props {
   initialItems: ReporteGeoItem[];
 }
 
+// Sprint 2026-07-08 (fix Bug 2): estados que se consideran "sin validar"
+// para renderearlos con opacidad reducida y contorno punteado. Los otros
+// (aprobado, publicado) se muestran con estilo sólido.
+const ESTADOS_SIN_VALIDAR = new Set(['pendiente', 'pendiente_revision']);
+
 export function MapaLeaflet({ initialItems }: Props) {
   const [items, setItems] = useState<ReporteGeoItem[]>(initialItems);
   const [filtros, setFiltros] = useState<ReportesGeoFiltros>({});
   const [loading, setLoading] = useState(false);
+  // Sprint 2026-07-08 (fix Bug 2): toggle para mostrar reportes en estado
+  // pendiente/pendiente_revision además de aprobado/publicado. Solo aplica
+  // al panel interno de Varone (no al mapa embebido en el sitio público).
+  const [incluirPendientes, setIncluirPendientes] = useState(false);
 
   async function aplicarFiltros() {
     setLoading(true);
@@ -54,6 +63,7 @@ export function MapaLeaflet({ initialItems }: Props) {
       if (filtros.tipo) params.set('tipo', filtros.tipo);
       if (filtros.desde) params.set('desde', filtros.desde);
       if (filtros.hasta) params.set('hasta', filtros.hasta);
+      if (incluirPendientes) params.set('incluir_pendientes', 'true');
       const r = await fetch(`/api/mapa/reportes-geo?${params.toString()}`);
       if (r.ok) {
         const j = (await r.json()) as { items?: ReporteGeoItem[] };
@@ -68,7 +78,7 @@ export function MapaLeaflet({ initialItems }: Props) {
   useEffect(() => {
     aplicarFiltros();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtros.tipo, filtros.desde, filtros.hasta]);
+  }, [filtros.tipo, filtros.desde, filtros.hasta, incluirPendientes]);
 
   // Contadores por tipo para la leyenda
   const counts = useMemo(() => {
@@ -116,6 +126,20 @@ export function MapaLeaflet({ initialItems }: Props) {
           />
         </label>
 
+        {/* Sprint 2026-07-08 (fix Bug 2): toggle para incluir pendientes */}
+        <label className="flex items-center gap-2 text-xs text-fg-muted cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={incluirPendientes}
+            onChange={(e) => setIncluirPendientes(e.target.checked)}
+            className="size-4 rounded border-border accent-amber-500"
+          />
+          <span>
+            Incluir pendientes
+            <span className="ml-1 text-fg-subtle">(sin aprobar aún)</span>
+          </span>
+        </label>
+
         <div className="ml-auto flex items-center gap-3 text-xs text-fg-muted">
           <span>{items.length} reportes en mapa</span>
           {loading && <span className="text-amber-500">Cargando…</span>}
@@ -142,30 +166,44 @@ export function MapaLeaflet({ initialItems }: Props) {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          {items.map((item) => (
-            <CircleMarker
-              key={item.id}
-              center={[item.lat, item.lng]}
-              radius={8}
-              pathOptions={{
-                color: COLOR_POR_TIPO[item.tipo_incidente] ?? COLOR_POR_DEFECTO,
-                fillColor: COLOR_POR_TIPO[item.tipo_incidente] ?? COLOR_POR_DEFECTO,
-                fillOpacity: 0.65,
-                weight: 2,
-              }}
-            >
-              <Popup>
-                <div className="space-y-1 text-xs">
-                  <p className="font-semibold">
-                    #{item.id} · {item.tipo_incidente}
-                  </p>
-                  <p>{item.ubicacion}{item.ruta && ` · ${item.ruta}`}</p>
-                  <p className="text-gray-600">{item.fecha}{item.hora && ` ${item.hora}`}</p>
-                  <p className="mt-1 line-clamp-3 text-gray-700">{item.descripcion}</p>
-                </div>
-              </Popup>
-            </CircleMarker>
-          ))}
+          {items.map((item) => {
+            // Sprint 2026-07-08 (fix Bug 2): reportes en pendiente/pendiente_revision
+            // se renderean con estilo distintivo — opacidad reducida y contorno
+            // punteado — para que Varone los diferencie visualmente de los ya
+            // validados (aprobado/publicado).
+            const sinValidar = ESTADOS_SIN_VALIDAR.has(item.estado);
+            const color = COLOR_POR_TIPO[item.tipo_incidente] ?? COLOR_POR_DEFECTO;
+            return (
+              <CircleMarker
+                key={item.id}
+                center={[item.lat, item.lng]}
+                radius={sinValidar ? 7 : 8}
+                pathOptions={{
+                  color,
+                  fillColor: color,
+                  fillOpacity: sinValidar ? 0.25 : 0.65,
+                  weight: 2,
+                  dashArray: sinValidar ? '4,3' : undefined,
+                }}
+              >
+                <Popup>
+                  <div className="space-y-1 text-xs">
+                    <p className="font-semibold">
+                      #{item.id} · {item.tipo_incidente}
+                      {sinValidar && (
+                        <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-2xs font-medium text-amber-800">
+                          {item.estado === 'pendiente_revision' ? 'REVISIÓN' : 'PENDIENTE'}
+                        </span>
+                      )}
+                    </p>
+                    <p>{item.ubicacion}{item.ruta && ` · ${item.ruta}`}</p>
+                    <p className="text-gray-600">{item.fecha}{item.hora && ` ${item.hora}`}</p>
+                    <p className="mt-1 line-clamp-3 text-gray-700">{item.descripcion}</p>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
         </MapContainer>
       </div>
     </div>

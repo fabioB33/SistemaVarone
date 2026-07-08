@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import { ENV } from '../config/env';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
+import { Prisma } from '@prisma/client';
 import prisma from '../services/prisma';
 import { notificar } from '../services/notificaciones';
 import logger from '../services/logger';
@@ -1104,6 +1105,16 @@ export function startDashboard(port: number = 3000) {
         : new Date();
       const tipo = req.query.tipo ? String(req.query.tipo) : null;
       const provincia = req.query.provincia ? String(req.query.provincia) : null;
+      // Sprint 2026-07-08 (fix Bug 2 mapa): query param `incluir_pendientes`
+      // para que el panel interno de Varone muestre TODOS los reportes
+      // geocodificados (pendientes + pendiente_revision + aprobado +
+      // publicado), no solo los ya validados. El mapa embebido en
+      // pirateriadecamiones.com.ar sigue sin pasar el flag → solo ve los
+      // 'aprobado' y 'publicado' como siempre.
+      const incluirPendientes = String(req.query.incluir_pendientes || '').toLowerCase() === 'true';
+      const estados = incluirPendientes
+        ? ['pendiente', 'pendiente_revision', 'aprobado', 'publicado']
+        : ['aprobado', 'publicado'];
 
       // INNER JOIN garantiza que solo viene reportes con cache hit.
       const items = await prisma.$queryRaw<Array<{
@@ -1132,7 +1143,7 @@ export function startDashboard(port: number = 3000) {
           AND r.creado_en <= ${hasta}
           AND (${tipo}::text IS NULL OR r.tipo_incidente = ${tipo})
           AND (${provincia}::text IS NULL OR r.provincia = ${provincia})
-          AND r.estado IN ('aprobado', 'publicado')
+          AND r.estado IN (${Prisma.join(estados)})
         ORDER BY r.creado_en DESC
         LIMIT 500
       `;

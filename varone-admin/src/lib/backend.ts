@@ -206,6 +206,10 @@ export interface ReportesGeoFiltros {
   hasta?: string;
   tipo?: string;
   provincia?: string;
+  // Sprint 2026-07-08 (fix Bug 2 mapa): incluir estados pendiente y
+  // pendiente_revision además de aprobado/publicado. Solo usado por el
+  // panel interno (no por el mapa embebido en el sitio público).
+  incluirPendientes?: boolean;
 }
 
 export async function listarReportesGeo(
@@ -216,6 +220,7 @@ export async function listarReportesGeo(
   if (filtros.hasta) params.set('hasta', filtros.hasta);
   if (filtros.tipo) params.set('tipo', filtros.tipo);
   if (filtros.provincia) params.set('provincia', filtros.provincia);
+  if (filtros.incluirPendientes) params.set('incluir_pendientes', 'true');
   const qs = params.toString();
   const r = await backendFetch<ReporteGeoItem[]>(
     `/api/reportes/geo${qs ? '?' + qs : ''}`,

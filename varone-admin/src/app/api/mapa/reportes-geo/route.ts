@@ -19,6 +19,10 @@ export async function GET(req: Request) {
       hasta: url.searchParams.get('hasta') ?? undefined,
       tipo: url.searchParams.get('tipo') ?? undefined,
       provincia: url.searchParams.get('provincia') ?? undefined,
+      // Sprint 2026-07-08 (fix Bug 2 mapa): permitir al panel interno pedir
+      // los reportes pendientes/pendiente_revision además de aprobado/publicado.
+      incluirPendientes:
+        url.searchParams.get('incluir_pendientes')?.toLowerCase() === 'true',
     });
     return NextResponse.json({ items });
   } catch {
