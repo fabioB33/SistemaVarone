@@ -8,7 +8,7 @@ import { ENV } from '../config/env';
 import { procesarTexto } from '../services/pipeline';
 import { setQrData, setWaConnected, setWaDisconnected, notificarDesconexion, emitirMensajeGrupo } from '../dashboard/server';
 import { registrarClienteWA, notificar } from '../services/notificaciones';
-import { setWaStateStatus, bumpWaStateUltimoMensaje } from '../services/wa-state';
+import { setWaStateStatus, bumpWaStateUltimoMensaje, getWaStatePersisted } from '../services/wa-state';
 
 const execAsync = promisify(exec);
 
@@ -124,12 +124,37 @@ function dentroDeLimite(senderId: string): boolean {
   return true;
 }
 
+// Tope máximo de recuperación de historial al reconectar: si la sesión estuvo
+// caída más de esto (ej. bot down un fin de semana entero), no tiene sentido
+// intentar reprocesar días de mensajes viejos — cubrimos como mucho 24hs hacia
+// atrás y confiamos en que el resto ya perdió vigencia como noticia.
+const HISTORIAL_MAX_MS = 24 * 60 * 60 * 1000;
+// Piso: siempre miramos al menos esta ventana, incluso si `ultimoMensajeEn`
+// es muy reciente (evita reprocesar 0 mensajes por un desfasaje de segundos).
+const HISTORIAL_MIN_MS = 2 * 60 * 60 * 1000;
+// Cuántos mensajes traer del chat como máximo. 50 no alcanzaba para cubrir un
+// grupo activo tras varias horas caído — lo subimos con margen.
+const HISTORIAL_FETCH_LIMIT = 300;
+
 async function procesarHistorialGrupo(): Promise<void> {
   // El chat de WA Web puede no haber terminado de cargar al momento del 'ready'.
   // fetchMessages() llama internamente a waitForChatLoading que requiere que el
   // chat ya esté abierto en la UI. Esperamos antes de intentar y reintentamos
   // si falla, en vez de tirar el error y dejar el bot zombie.
   await new Promise(resolve => setTimeout(resolve, 8_000));
+
+  // Calculamos la ventana de recuperación en base al último mensaje procesado
+  // ANTES de la caída (persistido en DB), no un valor fijo. Así, si el bot
+  // estuvo desconectado desde la mañana hasta la noche, recuperamos todo ese
+  // hueco en vez de perder las noticias de horas que quedaban fuera de una
+  // ventana fija de 2hs (bug reportado por Varone 2026-08-06: reconectó de
+  // noche y no trajo nada de lo perdido durante el día).
+  const estadoPrevio = await getWaStatePersisted().catch(() => null);
+  let ventanaMs = HISTORIAL_MIN_MS;
+  if (estadoPrevio?.ultimoMensajeEn) {
+    const desdeUltimoMensaje = Date.now() - estadoPrevio.ultimoMensajeEn.getTime();
+    ventanaMs = Math.min(Math.max(desdeUltimoMensaje, HISTORIAL_MIN_MS), HISTORIAL_MAX_MS);
+  }
 
   let chats: Awaited<ReturnType<typeof client.getChats>>;
   try {
@@ -156,7 +181,7 @@ async function procesarHistorialGrupo(): Promise<void> {
   let mensajes: Awaited<ReturnType<typeof grupo.fetchMessages>> | null = null;
   for (let i = 1; i <= MAX_INTENTOS; i++) {
     try {
-      mensajes = await grupo.fetchMessages({ limit: 50 });
+      mensajes = await grupo.fetchMessages({ limit: HISTORIAL_FETCH_LIMIT });
       break;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -172,11 +197,10 @@ async function procesarHistorialGrupo(): Promise<void> {
     return;
   }
 
+  const corteTimestamp = Date.now() / 1000 - ventanaMs / 1000;
   let procesados = 0;
   for (const msg of mensajes.reverse()) {
-    // Solo mensajes de las últimas 2 horas para no procesar cosas viejas
-    const hace2hs = Date.now() / 1000 - 2 * 60 * 60;
-    if (msg.timestamp < hace2hs) continue;
+    if (msg.timestamp < corteTimestamp) continue;
     if (!msg.body || msg.body.trim().length < 15) continue;
 
     procesadosAlReconectar.add(msg.id.id);
@@ -184,7 +208,8 @@ async function procesarHistorialGrupo(): Promise<void> {
     procesados++;
   }
 
-  logger.info(`[WhatsApp] Historial procesado: ${procesados} mensajes recientes analizados.`);
+  const ventanaHoras = (ventanaMs / 3_600_000).toFixed(1);
+  logger.info(`[WhatsApp] Historial procesado: ${procesados} mensajes analizados (ventana: ${ventanaHoras}hs, ${mensajes.length} mensajes traídos del chat).`);
 }
 
 export function iniciarWhatsApp(): void {
