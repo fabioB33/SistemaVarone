@@ -443,39 +443,71 @@ export function iniciarWhatsApp(): void {
  * significa que quedó un chromium huérfano (Puppeteer perdió el handle del proceso
  * pero el proceso chromium sigue vivo lockeando el userDataDir). En ese caso lo
  * matamos a nivel OS y reintentamos una vez más.
+ *
+ * DEBT 2026-08-05: si Puppeteer está realmente colgado (Runtime.callFunctionOn
+ * timed out — la página no responde), client.destroy() puede tardar hasta
+ * protocolTimeout (5 min) en resolver o rechazar. Como este reinicio puede
+ * disparar desde un zombie confirmado, el destroy() tiene su propio timeout
+ * corto: si no responde en DESTROY_TIMEOUT_MS, matamos el chromium a nivel OS
+ * directamente en vez de esperar a que Puppeteer se rinda solo.
  */
-async function reiniciarClienteSeguro(origen: string): Promise<void> {
-  try {
-    await client.destroy();
-  } catch (e) {
-    logger.error(`[WhatsApp] [${origen}] destroy falló:`, e);
-  }
-  // Espera para que Puppeteer libere el lock del userDataDir.
-  await new Promise(resolve => setTimeout(resolve, 5_000));
-  // Re-armar init watchdog: si este re-init también falla, otro retry en 90s.
-  armarInitWatchdog();
-  try {
-    await client.initialize();
-    logger.info(`[WhatsApp] [${origen}] cliente reiniciado correctamente.`);
+const DESTROY_TIMEOUT_MS = 15_000;
+
+let reiniciandoPorZombie = false;
+
+export async function reiniciarClienteSeguro(origen: string): Promise<void> {
+  // Guard: evita reinicios superpuestos si dos triggers (watchdog + healthcheck)
+  // disparan casi al mismo tiempo — el segundo destroy() sobre un cliente que
+  // ya está siendo destruido puede lanzar errores confusos.
+  if (reiniciandoPorZombie) {
+    logger.warn(`[WhatsApp] [${origen}] reinicio ya en curso, ignorando trigger duplicado.`);
     return;
-  } catch (e) {
-    const errMsg = e instanceof Error ? e.message : String(e);
-    const esBrowserLock = errMsg.includes('browser is already running') ||
-                          errMsg.includes('userDataDir') ||
-                          errMsg.includes('SingletonLock');
-    if (!esBrowserLock) {
-      logger.error(`[WhatsApp] [${origen}] re-init falló:`, e);
-      return;
+  }
+  reiniciandoPorZombie = true;
+  try {
+    try {
+      await Promise.race([
+        client.destroy(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('destroy-timeout')), DESTROY_TIMEOUT_MS)),
+      ]);
+    } catch (e) {
+      const esTimeout = e instanceof Error && e.message === 'destroy-timeout';
+      if (esTimeout) {
+        logger.warn(`[WhatsApp] [${origen}] destroy() no respondió en ${DESTROY_TIMEOUT_MS / 1000}s (Puppeteer colgado). Matando chromium a nivel OS.`);
+        await matarChromiumHuerfano();
+      } else {
+        logger.error(`[WhatsApp] [${origen}] destroy falló:`, e);
+      }
     }
-    logger.warn(`[WhatsApp] [${origen}] re-init falló por chromium huérfano. Limpiando y reintentando una vez...`);
-    await matarChromiumHuerfano();
+    // Espera para que Puppeteer libere el lock del userDataDir.
+    await new Promise(resolve => setTimeout(resolve, 5_000));
+    // Re-armar init watchdog: si este re-init también falla, otro retry en 90s.
     armarInitWatchdog();
     try {
       await client.initialize();
-      logger.info(`[WhatsApp] [${origen}] cliente reiniciado tras cleanup de chromium huérfano.`);
-    } catch (e2) {
-      logger.error(`[WhatsApp] [${origen}] re-init post-cleanup también falló:`, e2);
+      logger.info(`[WhatsApp] [${origen}] cliente reiniciado correctamente.`);
+      return;
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      const esBrowserLock = errMsg.includes('browser is already running') ||
+                            errMsg.includes('userDataDir') ||
+                            errMsg.includes('SingletonLock');
+      if (!esBrowserLock) {
+        logger.error(`[WhatsApp] [${origen}] re-init falló:`, e);
+        return;
+      }
+      logger.warn(`[WhatsApp] [${origen}] re-init falló por chromium huérfano. Limpiando y reintentando una vez...`);
+      await matarChromiumHuerfano();
+      armarInitWatchdog();
+      try {
+        await client.initialize();
+        logger.info(`[WhatsApp] [${origen}] cliente reiniciado tras cleanup de chromium huérfano.`);
+      } catch (e2) {
+        logger.error(`[WhatsApp] [${origen}] re-init post-cleanup también falló:`, e2);
+      }
     }
+  } finally {
+    reiniciandoPorZombie = false;
   }
 }
 

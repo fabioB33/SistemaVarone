@@ -3,6 +3,7 @@ import { notificar } from './notificaciones';
 import { getWaStatePersisted } from './wa-state';
 import logger from './logger';
 import { ENV } from '../config/env';
+import { reiniciarClienteSeguro } from '../agents/whatsapp';
 
 const TZ_AR = 'America/Argentina/Buenos_Aires';
 
@@ -137,12 +138,29 @@ export async function verificarSaludWaSilencioso(): Promise<void> {
       }
 
       const inactividad = ahora - ultimoMensaje;
-      if (inactividad > WA_ZOMBIE_THRESHOLD_MS && puedeAlertar('zombie-inactivo')) {
+      if (inactividad > WA_ZOMBIE_THRESHOLD_MS) {
         const mins = Math.round(inactividad / 60_000);
-        await notificar(
-          `⚠️ *Sistema Varone* — Bot conectado pero sin actividad hace ${mins} min.\nÚltimo mensaje recibido: ${persisted.ultimoMensajeEn?.toLocaleString('es-AR', { timeZone: TZ_AR })}.\nPosible bot zombie. El watchdog automático lo va a reiniciar en breve.`,
-        ).catch(() => {});
-        logger.warn(`[Healthcheck WA] Inactividad ${mins}m supera umbral`);
+        logger.warn(`[Healthcheck WA] Inactividad ${mins}m supera umbral. Forzando reinicio del cliente (zombie-detectado).`);
+        // DEBT 2026-08-05: antes solo se notificaba prometiendo un reinicio
+        // "automático en breve" que en realidad podía tardar hasta 6h (el
+        // watchdog de inactividad de whatsapp.ts) o nunca llegar si Puppeteer
+        // quedó realmente colgado sin emitir 'disconnected'. Ahora forzamos el
+        // reinicio acá mismo — reiniciarClienteSeguro() tiene su propio guard
+        // anti-solapamiento y timeout de destroy(), así que es seguro llamarlo
+        // aunque el watchdog interno también lo intente.
+        //
+        // El intento de reinicio corre en CADA tick (cada 5 min) mientras el
+        // bot siga zombie — no lo gateamos con el cooldown de la notificación,
+        // porque si el primer reinicio falla necesitamos seguir reintentando,
+        // no esperar 1h a la próxima notificación para volver a intentar.
+        reiniciarClienteSeguro('zombie-detectado').catch(e =>
+          logger.error('[Healthcheck WA] reiniciarClienteSeguro falló:', e),
+        );
+        if (puedeAlertar('zombie-inactivo')) {
+          await notificar(
+            `⚠️ *Sistema Varone* — Bot conectado pero sin actividad hace ${mins} min.\nÚltimo mensaje recibido: ${persisted.ultimoMensajeEn?.toLocaleString('es-AR', { timeZone: TZ_AR })}.\nPosible bot zombie — reiniciando el cliente automáticamente ahora. Si en 10 min sigue sin actividad, puede requerir reescanear el QR desde el panel.`,
+          ).catch(() => {});
+        }
       }
       return;
     }
