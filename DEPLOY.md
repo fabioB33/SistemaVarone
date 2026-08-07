@@ -2,6 +2,37 @@
 
 Sprint deploy-vps (2026-06-30) — Guía paso a paso para deployar el sistema completo en un VPS con HTTPS automático.
 
+## ⚠️ PENDIENTE DE DEPLOY (2026-08-07) — no borrar hasta verificar en el VPS
+
+Dos fixes commiteados y pusheados a `main` (`ace26c42`, `8959a8a4`) que **todavía no están en producción**. El bot del VPS sigue corriendo la versión vieja hasta que se haga el deploy de la sección ["Actualizar el sistema"](#actualizar-el-sistema) más abajo.
+
+**Qué se arregló:**
+1. **Ventana de recuperación de historial WA** (`ace26c42`) — al reconectar, antes solo recuperaba mensajes de las últimas 2hs fijas. Ahora calcula la ventana dinámicamente desde el último mensaje procesado (piso 2h / tope 24h). Reportado por el cliente: bot conectó a la mañana, a la noche pidió QR de nuevo, no trajo ninguna noticia del hueco perdido.
+2. **Zombie auto-heal real** (`8959a8a4`) — el healthcheck (`verificarSaludWaSilencioso`, cron cada 5 min) detectaba el bot "conectado" pero colgado (Puppeteer `Runtime.callFunctionOn timed out`) y solo notificaba, prometiendo un reinicio que en la práctica podía tardar 6h o nunca llegar. Ahora `reiniciarClienteSeguro()` está exportada y el healthcheck la invoca directamente en cada tick mientras detecte zombie. Ver [[docs/vault/debt/DEBT-2026-08-05-varone-wa-zombie-protocoltimeout-healthcheck-no-reinicia]] en el vault de Pampa Labs.
+
+**Cómo verificar tras el deploy** (correr contra los logs del backend en el VPS):
+
+```bash
+# Confirmar que el build corriendo tiene el fix (logea la ventana usada, no existía antes):
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone logs backend | grep "Historial procesado"
+# Debe verse algo como: "Historial procesado: N mensajes analizados (ventana: X.Xhs, Y mensajes traídos del chat)."
+
+# Confirmar que el auto-heal de zombie está activo (verification_query del DEBT):
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone logs --since 24h backend | grep -c "Zombie detectado"
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone logs --since 24h backend | grep -c "zombie-detectado"
+# Ambos números deberían ser iguales (o el segundo apenas mayor, por reintentos) —
+# cada zombie detectado debe tener un reinicio correlacionado.
+```
+
+**Acceptance criteria (marcar cuando se confirme en vivo, no solo en teoría):**
+- [ ] El bot sobrevive una reconexión real sin perder noticias del hueco de desconexión.
+- [ ] Un zombie detectado en producción dispara `reiniciarClienteSeguro('zombie-detectado')` sin intervención manual.
+- [ ] El bot sobrevive 7 días conectado sin requerir reescaneo del cliente (criterio original del DEBT, sigue sin confirmar).
+
+**Sigue sin resolver** (no arreglable sin acceso directo al VPS para investigar): por qué la sesión de WhatsApp a veces se pierde tras un reinicio forzado, pese a que el volumen `wwebjs_auth` persiste en disco. Si tras este deploy el auto-heal funciona pero el bot igual pide QR en cada reinicio, ese es el próximo punto a atacar.
+
+---
+
 ## Requisitos del VPS
 
 | Recurso | Mínimo | Recomendado |
