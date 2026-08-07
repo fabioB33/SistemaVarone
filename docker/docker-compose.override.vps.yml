@@ -7,10 +7,12 @@ services:
     ports:
       - "127.0.0.1:3011:3001"
   backend:
+    init: true
     depends_on: !reset []
     security_opt:
       - seccomp=unconfined
     shm_size: "1gb"
+    command: ["sh", "-c", "find /app/.wwebjs_auth -name 'Singleton*' -delete 2>/dev/null; exec node dist/index.js"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
   publisher:
