@@ -2,34 +2,68 @@
 
 Sprint deploy-vps (2026-06-30) — Guía paso a paso para deployar el sistema completo en un VPS con HTTPS automático.
 
-## ⚠️ PENDIENTE DE DEPLOY (2026-08-07) — no borrar hasta verificar en el VPS
+## ✅ Deployado y verificado en VPS (2026-08-07, confirmado 2026-08-08)
 
-Dos fixes commiteados y pusheados a `main` (`ace26c42`, `8959a8a4`) que **todavía no están en producción**. El bot del VPS sigue corriendo la versión vieja hasta que se haga el deploy de la sección ["Actualizar el sistema"](#actualizar-el-sistema) más abajo.
+Los fixes de ventana de recuperación de historial (`ace26c42`/`fe5a1630`), zombie auto-heal (`8959a8a4`/`69adf9cf`), `init:true` + limpieza de SingletonLock (`373ab50d`) y normalización de nombre de grupo (`887bfe7c`) están **deployados y verificados en el VPS** — confirmado contra el `dist/` corriendo, no solo el fuente (`Init=true`, `zombie-detectado` × 2 en `healthcheck.js`, `HISTORIAL_MAX_MS|ventana:` × 3 en `whatsapp.js`).
 
-**Qué se arregló:**
-1. **Ventana de recuperación de historial WA** (`ace26c42`) — al reconectar, antes solo recuperaba mensajes de las últimas 2hs fijas. Ahora calcula la ventana dinámicamente desde el último mensaje procesado (piso 2h / tope 24h). Reportado por el cliente: bot conectó a la mañana, a la noche pidió QR de nuevo, no trajo ninguna noticia del hueco perdido.
-2. **Zombie auto-heal real** (`8959a8a4`) — el healthcheck (`verificarSaludWaSilencioso`, cron cada 5 min) detectaba el bot "conectado" pero colgado (Puppeteer `Runtime.callFunctionOn timed out`) y solo notificaba, prometiendo un reinicio que en la práctica podía tardar 6h o nunca llegar. Ahora `reiniciarClienteSeguro()` está exportada y el healthcheck la invoca directamente en cada tick mientras detecte zombie. Ver [[docs/vault/debt/DEBT-2026-08-05-varone-wa-zombie-protocoltimeout-healthcheck-no-reinicia]] en el vault de Pampa Labs.
+## ⚠️ PENDIENTE DE DEPLOY (2026-08-10) — no borrar hasta verificar en el VPS
 
-**Cómo verificar tras el deploy** (correr contra los logs del backend en el VPS):
+3 fixes commiteados y pusheados a `main` (monorepo `92a89d5f` + `5217c558`, mismos cambios en el repo standalone `fabioB33/SistemaVarone` commits `e868fa6d` + `cced8381`) que **todavía no están en producción**. El bot del VPS sigue corriendo la versión sin estos fixes hasta que se haga el deploy de la sección ["Actualizar el sistema"](#actualizar-el-sistema) más abajo.
+
+### Fix 1 — vinculación de QR
+
+**Reporte del cliente:** "no se puede vincular el QR" — el escaneo no completa la vinculación.
+
+**Qué se arregló (2 causas independientes que se potencian entre sí):**
+1. **Versión de WhatsApp Web pineada obsoleta.** `webVersionCache` estaba fijado a `2.3000.1034733596-alpha` desde 2026-05-07 (~3 meses). WhatsApp deprecia versiones viejas del frontend para el handshake de vínculos **nuevos** — sesiones ya vinculadas siguen andando, pero un QR escaneado contra un protocolo obsoleto puede ser rechazado silenciosamente. Actualizado a `2.3000.1044858477-alpha` (verificado accesible).
+2. **El timer de refresh de QR (cada 50s) mataba escaneos en curso.** No distinguía "nadie escaneó" de "acaban de escanear, autenticando" — solo chequeaba `conectado`, que recién pasa a `true` en `ready` (puede tardar más de 50s en un VPS bajo carga). Fix: nuevo listener `authenticated` (dispara cuando el teléfono confirma el escaneo, ANTES de `ready`) con flag `autenticando` que el timer respeta, dándole un margen extra de 60s antes de forzar reinicio.
 
 ```bash
-# Confirmar que el build corriendo tiene el fix (logea la ventana usada, no existía antes):
-docker compose -f docker/docker-compose.prod.yml -p sistema-varone logs backend | grep "Historial procesado"
-# Debe verse algo como: "Historial procesado: N mensajes analizados (ventana: X.Xhs, Y mensajes traídos del chat)."
+# Confirmar que el build corriendo tiene la versión de WA Web nueva:
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone exec backend \
+  grep -o "2.3000.[0-9]*-alpha" dist/agents/whatsapp.js
+# Debe verse: 2.3000.1044858477-alpha (o una versión más nueva si se re-pineó de nuevo)
 
-# Confirmar que el auto-heal de zombie está activo (verification_query del DEBT):
-docker compose -f docker/docker-compose.prod.yml -p sistema-varone logs --since 24h backend | grep -c "Zombie detectado"
-docker compose -f docker/docker-compose.prod.yml -p sistema-varone logs --since 24h backend | grep -c "zombie-detectado"
-# Ambos números deberían ser iguales (o el segundo apenas mayor, por reintentos) —
-# cada zombie detectado debe tener un reinicio correlacionado.
+# Confirmar que el listener de 'authenticated' está en el build corriendo:
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone exec backend \
+  grep -c "authenticated" dist/agents/whatsapp.js
 ```
 
-**Acceptance criteria (marcar cuando se confirme en vivo, no solo en teoría):**
-- [ ] El bot sobrevive una reconexión real sin perder noticias del hueco de desconexión.
-- [ ] Un zombie detectado en producción dispara `reiniciarClienteSeguro('zombie-detectado')` sin intervención manual.
-- [ ] El bot sobrevive 7 días conectado sin requerir reescaneo del cliente (criterio original del DEBT, sigue sin confirmar).
+**Acceptance criteria:**
+- [ ] El cliente escanea el QR y el bot pasa a "conectado" sin tener que reintentar.
+- [ ] Si el escaneo tarda, el timer de 50s no interrumpe la autenticación en curso (verificar en logs: `"Escaneo en curso (authenticated sin ready aún)"` en vez de un reinicio a mitad de camino).
 
-**Sigue sin resolver** (no arreglable sin acceso directo al VPS para investigar): por qué la sesión de WhatsApp a veces se pierde tras un reinicio forzado, pese a que el volumen `wwebjs_auth` persiste en disco. Si tras este deploy el auto-heal funciona pero el bot igual pide QR en cada reinicio, ese es el próximo punto a atacar.
+### Fix 2 — mensajes perdidos por timeout del pipeline ante rate-limit de la IA
+
+**Encontrado en escaneo profundo, no reportado por el cliente todavía** (bug silencioso — no genera error visible, el mensaje simplemente nunca genera un reporte).
+
+`PIPELINE_TIMEOUT_MS` estaba en 30s, menor que el peor caso del propio backoff de `analizarConIA()` ante rate-limit (8s + 32s = 40s solo de esperas). En una ráfaga de mensajes del grupo (el escenario más probable de pegarle un rate-limit real), el pipeline descartaba el mensaje como error antes de que el retry pudiera completar. Subido a 75s.
+
+```bash
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone exec backend \
+  grep -o "PIPELINE_TIMEOUT_MS = [0-9_]*" dist/services/pipeline.js
+# Debe verse: PIPELINE_TIMEOUT_MS = 75_000 (o el valor equivalente compilado)
+```
+
+**Acceptance criteria:**
+- [ ] Ningún mensaje se pierde en los logs con `Timeout (30000ms): analizarConIA` — si aparece `Timeout (75000ms)` en vez de eso, revisar si el rate-limit está durando aún más de lo esperado.
+
+### Fix 3 — race condition en publicación a Framer
+
+**Encontrado en escaneo profundo, no reportado por el cliente todavía.**
+
+`postearReporte()` en `framer-publisher` se llamaba desde 3 puntos del backend (cron de reintentos, aprobar desde el panel, botón de reintentar uno) sin ningún lock compartido — dos publicaciones concurrentes podían pisarse la escritura del archivo de sesión de Framer, dejando cookies inválidas persistidas. Fix: cola de promesas interna en el publisher serializa todas las llamadas.
+
+```bash
+# Confirmar que el fix está en el build corriendo del publisher:
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone exec publisher \
+  grep -c "colaPublicacion" dist/form-filler.js
+```
+
+**Acceptance criteria:**
+- [ ] Si el cron de reintentos y una aprobación manual coinciden en el tiempo, ambas publicaciones se completan sin error de "sesión expirada" espurio.
+
+**Sigue sin resolver** (no arreglable sin acceso directo al VPS para investigar): por qué la sesión de WhatsApp a veces se pierde tras un reinicio forzado, pese a que el volumen `wwebjs_auth` persiste en disco.
 
 ---
 
