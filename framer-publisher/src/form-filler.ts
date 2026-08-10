@@ -216,10 +216,33 @@ export interface SubmitResult {
 }
 
 /**
- * Postea 1 reporte al formulario público.
- * Best-effort: si algo falla, retorna {ok: false, error}.
+ * Fix 2026-08-10: el backend principal llama a este publisher desde 3 puntos
+ * independientes (cron de reintentos cada 15min, aprobar un reporte desde el
+ * panel, botón de "reintentar uno") sin ningún lock compartido entre ellos.
+ * `postearReporte` real usa el `browser` singleton de arriba y al final
+ * escribe SIEMPRE el mismo archivo (`storageStatePath`) — si dos llamadas
+ * corren en paralelo, cada una abre su propio BrowserContext (potencialmente
+ * ambos re-logueando si la sesión venía inválida) y ambas pisan el mismo
+ * archivo de sesión al terminar, pudiendo persistir cookies de un login que
+ * en el medio quedó obsoleto. Síntoma en producción: "sesión expirada" sin
+ * causa aparente en la siguiente publicación.
+ *
+ * Se serializan todas las llamadas con una cola de promesas — el publisher
+ * es un microservicio dedicado, publicar 1 reporte por vez (nunca son miles
+ * por minuto) no es un cuello de botella real, y elimina la clase de bug
+ * entera sin tener que coordinar los 3 callers del lado del backend.
  */
-export async function postearReporte(input: ReporteFormInput): Promise<SubmitResult> {
+let colaPublicacion: Promise<unknown> = Promise.resolve();
+
+export function postearReporte(input: ReporteFormInput): Promise<SubmitResult> {
+  const siguiente = colaPublicacion.then(() => _postearReporteInterno(input));
+  // Encadenamos SIEMPRE (incluso si _postearReporteInterno rechaza) para que
+  // un fallo no deje la cola trabada esperando una promesa ya rechazada.
+  colaPublicacion = siguiente.catch(() => {});
+  return siguiente;
+}
+
+async function _postearReporteInterno(input: ReporteFormInput): Promise<SubmitResult> {
   const cfg = getConfig();
   const ctx = await getContext(cfg);
   const page = await ctx.newPage();

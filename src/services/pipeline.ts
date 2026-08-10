@@ -61,7 +61,16 @@ async function verificarSpike(): Promise<void> {
   }
 }
 
-const PIPELINE_TIMEOUT_MS = 30_000;
+// Fix 2026-08-10: 30s era menor que el peor caso del propio backoff de
+// analizarConIA() ante rate-limit (8s + 32s = 40s de solo esperas, sin contar
+// latencia real de red de las 3 llamadas). El timeout siempre ganaba la
+// carrera contra el retry diseñado exactamente para ese escenario — el
+// pipeline descartaba el mensaje como error ANTES de que el 2do/3er intento
+// pudiera correr, y el texto original nunca se reencolaba. En una ráfaga de
+// mensajes (el caso más probable de pegarle un rate-limit real) esto perdía
+// reportes de incidentes en silencio. 75s cubre el peor caso (40s de espera +
+// latencia de red) con margen.
+const PIPELINE_TIMEOUT_MS = 75_000;
 const URL_FETCH_TIMEOUT_MS = 10_000;
 
 // Cola FIFO para procesar mensajes de a uno — evita rate limit cuando llegan ráfagas
