@@ -64,6 +64,15 @@ let ultimaActividad = Date.now();
 // sentido reiniciar (no reiniciar mientras espera QR — rompe el ciclo de QRs).
 let conectado = false;
 
+// Fix 2026-08-10: el evento 'authenticated' llega cuando el teléfono ya
+// confirmó el escaneo del QR, ANTES de 'ready' (que recién llega cuando WA
+// Web terminó de cargar el chat completo — puede tardar bastante). Sin este
+// flag, el timer de refresh de QR (abajo) no tenía forma de saber que el
+// usuario ya escaneó, y podía destruir el cliente a mitad de la autenticación
+// si 'ready' tardaba más de QR_REFRESH_MS. Bug reportado por Varone: "escaneé
+// y no vinculó".
+let autenticando = false;
+
 // QR refresh: whatsapp-web.js NO emite client.on('qr') cada rotación de WhatsApp
 // Web (~30s). El primer QR queda servido durante minutos hasta que algún evento
 // dispara el handler. Para evitar que el usuario vea siempre el mismo QR mientras
@@ -72,6 +81,12 @@ let conectado = false;
 // hacer nada.
 const QR_REFRESH_MS = 50_000;
 let qrRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Margen extra tras 'authenticated' antes de forzar reinicio si 'ready' nunca
+// llega. Cubre el caso donde el escaneo se confirmó pero Puppeteer se cuelga
+// terminando de cargar el chat — sin esto, o se mata la autenticación en
+// curso (guard sin margen), o queda pegado para siempre (guard sin timeout).
+const AUTENTICANDO_GRACE_MS = 60_000;
 
 // Init watchdog: si el cliente queda colgado al iniciar (Puppeteer timeout,
 // crash silencioso, o cualquier otra razón) y no emite ni 'qr' ni 'ready' en
@@ -220,10 +235,19 @@ export function iniciarWhatsApp(): void {
     // errores como "Cannot read properties of undefined (reading
     // 'waitForChatLoading')". Pinear un HTML estable de wppconnect-team/wa-version
     // evita el bug. Cuando whatsapp-web.js publique fix oficial, sacar este bloque.
+    //
+    // Actualizado 2026-08-10: el pin anterior (2.3000.1034733596-alpha, de
+    // 2026-05-07, ~3 meses) es sospechoso #1 del bug "no se puede vincular el
+    // QR" reportado por Varone — WhatsApp deprecia versiones viejas del
+    // frontend para el handshake de NUEVOS vínculos (sesiones ya vinculadas
+    // con una versión vieja pueden seguir andando, pero un QR nuevo escaneado
+    // contra un protocolo obsoleto puede ser rechazado silenciosamente).
+    // Revisar wppconnect-team/wa-version cada ~4-6 semanas y re-pinear a la
+    // última versión listada si vuelve a fallar la vinculación.
     webVersionCache: {
       type: 'remote',
       remotePath:
-        'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1034733596-alpha.html',
+        'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1044858477-alpha.html',
     },
     puppeteer: {
       headless: true,
@@ -242,21 +266,47 @@ export function iniciarWhatsApp(): void {
     },
   });
 
+  const programarQrRefresh = () => {
+    if (qrRefreshTimer) clearTimeout(qrRefreshTimer);
+    qrRefreshTimer = setTimeout(async () => {
+      if (conectado) return; // ya está operativo, no hace falta nada
+      if (autenticando) {
+        // El teléfono ya escaneó y está autenticando — no matar el cliente a
+        // mitad de camino (bug reportado por Varone: "escaneé y no vinculó").
+        // Damos un margen extra de AUTENTICANDO_GRACE_MS: si 'ready' sigue sin
+        // llegar para entonces, algo se colgó de verdad y ahí sí reiniciamos,
+        // para no quedar pegado indefinidamente si Puppeteer nunca emite
+        // 'ready' ni 'disconnected'/'auth_failure' tras el escaneo.
+        logger.info('[WhatsApp] Escaneo en curso (authenticated sin ready aún) — extendiendo espera antes de refrescar QR.');
+        qrRefreshTimer = setTimeout(async () => {
+          if (conectado) return;
+          logger.warn('[WhatsApp] Autenticación colgada tras escaneo (sin ready). Forzando reinicio.');
+          await reiniciarClienteSeguro('qr-refresh-post-auth-stuck');
+        }, AUTENTICANDO_GRACE_MS);
+        return;
+      }
+      logger.info('[WhatsApp] Forzando refresh de QR (timeout sin escaneo).');
+      await reiniciarClienteSeguro('qr-refresh');
+    }, QR_REFRESH_MS);
+  };
+
   client.on('qr', (qr) => {
     logger.info('[WhatsApp] Escaneá este código QR:');
     qrcode.generate(qr, { small: true });
     setQrData(qr);
     cancelarInitWatchdog(); // ya emitió QR, no se quedó colgado al iniciar
     void setWaStateStatus('qr', 'qr');
+    autenticando = false; // QR nuevo = todavía no escanearon este
 
     // Programar re-init para forzar nuevo QR si el usuario no escanea a tiempo.
-    // Cancelamos el timer anterior (si existe) y agendamos uno fresco.
-    if (qrRefreshTimer) clearTimeout(qrRefreshTimer);
-    qrRefreshTimer = setTimeout(async () => {
-      if (conectado) return; // ya escaneo, no necesitamos refrescar
-      logger.info('[WhatsApp] Forzando refresh de QR (timeout sin escaneo).');
-      await reiniciarClienteSeguro('qr-refresh');
-    }, QR_REFRESH_MS);
+    programarQrRefresh();
+  });
+
+  client.on('authenticated', () => {
+    logger.info('[WhatsApp] QR escaneado, autenticando sesión...');
+    autenticando = true;
+    // No tocamos qrRefreshTimer acá — programarQrRefresh() ya contempla este
+    // flag cuando dispare y le da el margen extra correspondiente.
   });
 
   client.on('ready', async () => {
@@ -264,6 +314,7 @@ export function iniciarWhatsApp(): void {
     intentosReconexion = 0;
     ultimaActividad = Date.now();
     conectado = true;
+    autenticando = false;
     cancelarInitWatchdog();
     // Fix QR (2026-07-06): flipear el estado a "connected" YA, sin bloquear en
     // el lookup del nombre del grupo (query DB). Bajo carga ese await demoraba el
@@ -363,6 +414,7 @@ export function iniciarWhatsApp(): void {
   client.on('disconnected', async (reason) => {
     logger.warn('[WhatsApp] Desconectado:', reason);
     conectado = false;
+    autenticando = false;
     setWaDisconnected();
     void setWaStateStatus('disconnected', 'disconnected', { reason: String(reason) });
     await notificarDesconexion(reason);
@@ -395,6 +447,7 @@ export function iniciarWhatsApp(): void {
   client.on('auth_failure', async (msg) => {
     logger.error('[WhatsApp] Error de autenticación:', msg);
     conectado = false;
+    autenticando = false;
     setWaDisconnected();
     void setWaStateStatus('disconnected', 'auth_failure', { reason: String(msg) });
     const alerta = `🔐 *Sistema Varone — Error de autenticación*\nWhatsApp rechazó las credenciales guardadas.\nMotivo: ${msg}\n\nEl sistema reintentará automáticamente. Si persiste, hay que reescanear el QR desde el panel.`;
