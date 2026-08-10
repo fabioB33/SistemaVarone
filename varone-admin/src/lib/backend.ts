@@ -391,6 +391,32 @@ export async function obtenerWaStatus(): Promise<WaStatus | null> {
   }
 }
 
+export interface WaGruposResp {
+  ok: boolean;
+  /** 'desconectado' si el bot no está vinculado; 'error' si getChats() falló. */
+  motivo?: 'desconectado' | 'error';
+  error?: string;
+  grupos: string[];
+}
+
+/**
+ * Grupos reales de la cuenta de WhatsApp vinculada.
+ * Alimenta el desplegable de /configuracion. Si el bot no está conectado
+ * devuelve `ok:false` y el form cae al input de texto libre.
+ */
+export async function listarGruposWa(): Promise<WaGruposResp> {
+  try {
+    const headers: Record<string, string> = {};
+    const backendToken = process.env.BACKEND_API_TOKEN;
+    if (backendToken) headers['X-Backend-Token'] = backendToken;
+    const res = await fetch(`${BACKEND_URL}/api/wa/grupos`, { headers, cache: 'no-store' });
+    if (!res.ok) return { ok: false, motivo: 'error', error: `HTTP ${res.status}`, grupos: [] };
+    return (await res.json()) as WaGruposResp;
+  } catch (e) {
+    return { ok: false, motivo: 'error', error: e instanceof Error ? e.message : String(e), grupos: [] };
+  }
+}
+
 // ─── Sprint scrapers-portales (2026-06-30) ──────────────────────────────────
 
 export async function listarDescartados(opts?: {

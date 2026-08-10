@@ -13,6 +13,46 @@ import { setWaStateStatus, bumpWaStateUltimoMensaje, getWaStatePersisted } from 
 const execAsync = promisify(exec);
 
 /**
+ * Normaliza un nombre de grupo para compararlo sin sorpresas invisibles.
+ *
+ * Bug 2026-08-07: el nombre se comparaba con `===` estricto contra el valor
+ * cargado a mano en /configuracion. Una tilde, un espacio de más o un espacio
+ * duro (NBSP, que aparece al renombrar grupos desde algunos teléfonos) alcanzan
+ * para que el bot conecte y reporte "grupo no encontrado", sin ninguna pista
+ * visible: en pantalla los dos strings se ven idénticos.
+ *
+ * Pedirle a un cliente que transcriba un string sin errores no es un requisito
+ * razonable, así que comparamos por forma normalizada: sin diacríticos, sin
+ * distinguir mayúsculas, con los espacios colapsados y recortados.
+ */
+export function normalizarNombreGrupo(nombre: string | null | undefined): string {
+  return (nombre ?? '')
+    .normalize('NFD')                       // separa letra base + diacrítico
+    .replace(/[̀-ͯ]/g, '')        // borra tildes, diéresis, etc.
+    .replace(/[   ]/g, ' ')  // espacios duros → espacio común
+    .replace(/[\u200b-\u200d\ufeff]/g, '') // caracteres de ancho cero (invisibles)
+    .replace(/\s+/g, ' ')                   // colapsa espacios, tabs y saltos
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Nombres de los grupos de WhatsApp que ve la cuenta vinculada.
+ * Lo consume el desplegable de /configuracion, para que el grupo se elija de
+ * una lista real en vez de escribirse a mano.
+ *
+ * Lanza si el cliente no está conectado — lo maneja el endpoint que la llama.
+ */
+export async function listarGruposWA(): Promise<string[]> {
+  const chats = await client.getChats();
+  return chats
+    .filter(c => c.isGroup)
+    .map(c => c.name)
+    .filter((n): n is string => Boolean(n))
+    .sort((a, b) => a.localeCompare(b, 'es'));
+}
+
+/**
  * Mata cualquier chromium huérfano que haya quedado lockeando .wwebjs_auth/session/.
  * Se invoca antes de un re-init cuando detectamos error "browser already running".
  *
@@ -183,10 +223,25 @@ async function procesarHistorialGrupo(): Promise<void> {
   // en vez de ENV, así se respeta el override que Varone hizo en /configuracion.
   const { obtenerWaGroupName } = await import('../services/config-admin');
   const groupName = await obtenerWaGroupName();
-  const grupo = chats.find(c => c.isGroup && c.name === groupName);
+  const objetivo = normalizarNombreGrupo(groupName);
+  const gruposVisibles = chats.filter(c => c.isGroup);
+  const grupo = gruposVisibles.find(c => normalizarNombreGrupo(c.name) === objetivo);
   if (!grupo) {
-    logger.warn(`[WhatsApp] Grupo "${groupName}" no encontrado al reconectar.`);
+    // Log diagnóstico: sin la lista de lo que SÍ ve, este warning obliga a
+    // adivinar. Con la lista, la diferencia (tilde, espacio, grupo equivocado)
+    // salta a la vista en el primer renglón.
+    const vistos = gruposVisibles.map(g => JSON.stringify(g.name)).join(', ');
+    logger.warn(
+      `[WhatsApp] Grupo "${groupName}" no encontrado al reconectar. ` +
+      `Grupos visibles (${gruposVisibles.length}): ${vistos || '(ninguno)'}`,
+    );
     return;
+  }
+  if (grupo.name !== groupName) {
+    logger.info(
+      `[WhatsApp] El grupo configurado ("${groupName}") matcheó por normalización ` +
+      `con el grupo real ("${grupo.name}"). Conviene corregirlo en /configuracion.`,
+    );
   }
 
   logger.info(`[WhatsApp] Procesando historial del grupo "${grupo.name}"...`);
@@ -361,7 +416,10 @@ export function iniciarWhatsApp(): void {
       // para que el override desde /configuracion aplique sin restart.
       const { obtenerWaGroupName: obtenerWaGroupNameMsg } = await import('../services/config-admin');
       const groupNameActual = await obtenerWaGroupNameMsg();
-      if (!chat.isGroup || chat.name !== groupNameActual) return;
+      // Comparación normalizada (ver normalizarNombreGrupo): tildes, mayúsculas
+      // y espacios de más no pueden ser la diferencia entre ingerir el grupo o
+      // ignorarlo en silencio.
+      if (!chat.isGroup || normalizarNombreGrupo(chat.name) !== normalizarNombreGrupo(groupNameActual)) return;
 
       // Bumpea ultimoMensajeEn en DB (lo usa el healthcheck para detectar zombies).
       // Lo hacemos antes del rate-limit/type filter porque incluso mensajes ignorados

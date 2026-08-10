@@ -1548,6 +1548,31 @@ export function startDashboard(port: number = 3000) {
     });
   });
 
+  // API: grupos reales de la cuenta de WhatsApp vinculada.
+  //
+  // Alimenta el desplegable de /configuracion. Antes el nombre del grupo era un
+  // campo de texto libre y el cliente tenía que transcribirlo carácter por
+  // carácter; el 2026-08-07 una diferencia invisible dejó el bot conectado pero
+  // sordo durante horas. Elegir de una lista real elimina esa clase de error.
+  //
+  // Requiere el cliente conectado: si no lo está, devolvemos ok:false con el
+  // motivo para que el panel muestre el fallback de texto libre en vez de un
+  // desplegable vacío.
+  app.get('/api/wa/grupos', async (_req, res) => {
+    if (waStatus !== 'connected') {
+      res.json({ ok: false, motivo: 'desconectado', grupos: [] });
+      return;
+    }
+    try {
+      const { listarGruposWA } = await import('../agents/whatsapp');
+      res.json({ ok: true, grupos: await listarGruposWA() });
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      logger.error('[Dashboard] /api/wa/grupos falló:', e);
+      res.json({ ok: false, motivo: 'error', error, grupos: [] });
+    }
+  });
+
   // API: exportar CSV
   app.get('/api/exportar', async (req, res) => {
     const { fuente, gravedad, busqueda } = req.query;
