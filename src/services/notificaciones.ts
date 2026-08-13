@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { ENV } from '../config/env';
+import logger from './logger';
 
 // Chat ID de WhatsApp para mensajes directos: número@c.us
 const VARONE_CHAT_ID = `${ENV.VARONE_WA_NUMBER}@c.us`;
@@ -20,8 +21,24 @@ export function registrarClienteWA(client: { sendMessage: (chatId: string, text:
 /**
  * Envía un mensaje de alerta directamente a Varone por WhatsApp.
  * Si WhatsApp no está disponible, loguea en consola como fallback.
+ *
+ * Fix 2026-08-13: Varone pidió poder apagar TODAS las notificaciones
+ * (incluidos los reportes nuevos pendientes de aprobar, no solo las alertas
+ * de infraestructura) desde el panel, sin tocar el servidor. El toggle vive
+ * en config_admin (whatsapp.notificaciones_activas) — default `true`, así
+ * que si nadie lo toca el comportamiento es idéntico al de siempre.
+ *
+ * Se sigue logueando en consola aunque esté desactivado: apagar el WhatsApp
+ * no debe dejar al sistema completamente ciego para quien mire los logs.
  */
 export async function notificar(texto: string): Promise<void> {
+  const { obtenerNotificacionesActivas } = await import('./config-admin');
+  const activas = await obtenerNotificacionesActivas().catch(() => true);
+  if (!activas) {
+    logger.info(`[Notif] (notificaciones desactivadas desde /configuracion) ${texto.slice(0, 100)}`);
+    return;
+  }
+
   if (_waClient) {
     try {
       await _waClient.sendMessage(VARONE_CHAT_ID, texto);

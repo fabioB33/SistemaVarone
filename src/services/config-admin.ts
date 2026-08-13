@@ -6,6 +6,7 @@
  *  - portales.activos: { clarin: true, cronica: true, ... }
  *  - portales.custom: [{ nombre, url, activo }]
  *  - whatsapp.group_name: string
+ *  - whatsapp.notificaciones_activas: boolean (Fix 2026-08-13)
  *
  * Todas son opcionales — si no están seteadas en DB, caemos al default del
  * .env (regla #9 NO-HARDCODED). Los `set*` invalidan un cache in-memory.
@@ -115,6 +116,45 @@ export async function setWaGroupName(groupName: string, editorPor: string): Prom
   logger.info(`[ConfigAdmin] whatsapp.group_name actualizado por ${editorPor}: "${groupName}"`);
 }
 
+// ─── Notificaciones a Varone por WhatsApp (alertas del sistema) ─────────
+
+/**
+ * Fix 2026-08-13 — Varone pidió poder apagar las notificaciones del sistema
+ * (desconexiones, zombies, healthcheck diario, etc.) sin tocar el servidor.
+ * Antes no había ningún toggle: todo pasaba siempre por notificar() en
+ * src/services/notificaciones.ts. Default `true` para preservar el
+ * comportamiento actual si nadie toca el switch.
+ */
+export async function obtenerNotificacionesActivas(): Promise<boolean> {
+  const cached = getCached<boolean>('whatsapp.notificaciones_activas');
+  if (cached !== null) return cached;
+
+  try {
+    const row = await prisma.configAdmin.findUnique({ where: { key: 'whatsapp.notificaciones_activas' } });
+    const value = typeof row?.value === 'boolean' ? row.value : true;
+    setCached('whatsapp.notificaciones_activas', value);
+    return value;
+  } catch (err) {
+    logger.warn(`[ConfigAdmin] obtenerNotificacionesActivas error, fallback a activado: ${err instanceof Error ? err.message : err}`);
+    return true;
+  }
+}
+
+export async function setNotificacionesActivas(activas: boolean, editorPor: string): Promise<void> {
+  await prisma.configAdmin.upsert({
+    where: { key: 'whatsapp.notificaciones_activas' },
+    create: {
+      key: 'whatsapp.notificaciones_activas',
+      value: activas,
+      updatedBy: editorPor,
+      descripcion: 'Si está en false, el sistema no manda alertas por WhatsApp a Varone',
+    },
+    update: { value: activas, updatedBy: editorPor },
+  });
+  invalidarConfigCache();
+  logger.info(`[ConfigAdmin] whatsapp.notificaciones_activas actualizado por ${editorPor}: ${activas}`);
+}
+
 // ─── Snapshot completo (para UI) ────────────────────────────────────────
 
 export interface ConfigAdminSnapshot {
@@ -125,13 +165,15 @@ export interface ConfigAdminSnapshot {
   whatsapp: {
     groupName: string;
     groupNameEnv: string; // default del .env, para mostrar en UI
+    notificacionesActivas: boolean;
   };
 }
 
 export async function obtenerConfigSnapshot(): Promise<ConfigAdminSnapshot> {
-  const [portalesActivos, waGroupName] = await Promise.all([
+  const [portalesActivos, waGroupName, notificacionesActivas] = await Promise.all([
     obtenerPortalesActivos(),
     obtenerWaGroupName(),
+    obtenerNotificacionesActivas(),
   ]);
   return {
     portales: {
@@ -141,6 +183,7 @@ export async function obtenerConfigSnapshot(): Promise<ConfigAdminSnapshot> {
     whatsapp: {
       groupName: waGroupName,
       groupNameEnv: ENV.WA_GROUP_NAME || '',
+      notificacionesActivas,
     },
   };
 }

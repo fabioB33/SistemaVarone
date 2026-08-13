@@ -506,6 +506,7 @@ export interface ConfigAdminSnapshot {
   whatsapp: {
     groupName: string;
     groupNameEnv: string;
+    notificacionesActivas: boolean;
   };
 }
 
@@ -532,6 +533,17 @@ export async function guardarWaGroupName(
   return backendFetch('/api/admin/config/whatsapp-group', {
     method: 'POST',
     body: JSON.stringify({ groupName, editorPor }),
+  });
+}
+
+// Fix 2026-08-13 — toggle de notificaciones a Varone por WhatsApp.
+export async function guardarNotificacionesActivas(
+  activas: boolean,
+  editorPor: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return backendFetch('/api/admin/config/notificaciones', {
+    method: 'POST',
+    body: JSON.stringify({ activas, editorPor }),
   });
 }
 

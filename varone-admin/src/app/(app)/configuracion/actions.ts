@@ -6,7 +6,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { getSession } from '@/lib/auth';
-import { guardarPortalesActivos, guardarWaGroupName } from '@/lib/backend';
+import { guardarPortalesActivos, guardarWaGroupName, guardarNotificacionesActivas } from '@/lib/backend';
 
 export async function guardarPortalesActivosAction(
   activos: Record<string, boolean>,
@@ -26,6 +26,17 @@ export async function guardarWaGroupNameAction(
   if (!session) return { ok: false, error: 'No autenticado' };
 
   const r = await guardarWaGroupName(groupName.trim(), session.user);
+  if (r.ok) revalidatePath('/configuracion');
+  return r;
+}
+
+export async function guardarNotificacionesActivasAction(
+  activas: boolean,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: 'No autenticado' };
+
+  const r = await guardarNotificacionesActivas(activas, session.user);
   if (r.ok) revalidatePath('/configuracion');
   return r;
 }

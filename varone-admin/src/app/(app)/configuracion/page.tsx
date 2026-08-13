@@ -14,6 +14,7 @@ import { obtenerConfigAdmin, listarPortalesCustom } from '@/lib/backend';
 import { PortalesForm } from './portales-form';
 import { WhatsAppForm } from './whatsapp-form';
 import { PortalesCustomForm } from './portales-custom-form';
+import { NotificacionesForm } from './notificaciones-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,6 +66,8 @@ export default async function ConfiguracionPage() {
         initialGroupName={config.whatsapp.groupName}
         envDefault={config.whatsapp.groupNameEnv}
       />
+
+      <NotificacionesForm initialActivas={config.whatsapp.notificacionesActivas} />
     </section>
   );
 }

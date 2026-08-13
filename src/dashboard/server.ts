@@ -894,6 +894,23 @@ export function startDashboard(port: number = 3000) {
     }
   });
 
+  // Fix 2026-08-13: POST setNotificacionesActivas — body: { activas, editorPor }
+  app.post('/api/admin/config/notificaciones', mutationsLimiter, async (req, res) => {
+    try {
+      const { setNotificacionesActivas } = await import('../services/config-admin');
+      if (typeof req.body?.activas !== 'boolean') {
+        res.status(400).json({ ok: false, error: 'body.activas requerido (boolean)' });
+        return;
+      }
+      const editorPor = String(req.body?.editorPor || 'anonymous');
+      await setNotificacionesActivas(req.body.activas, editorPor);
+      res.json({ ok: true, activas: req.body.activas });
+    } catch (error) {
+      logger.error('[Dashboard] /api/admin/config/notificaciones POST:', error);
+      res.status(500).json({ ok: false, error: 'Error al guardar' });
+    }
+  });
+
   // ═══════════════════════════════════════════════════════════════════
   // Sprint portales-custom (2026-07-06) — CRUD de portales agregados
   // por Varone desde /configuracion (además de los 6 hardcoded).
