@@ -476,77 +476,168 @@ export function startDashboard(port: number = 3000) {
 
   /**
    * Sprint 2026-07-07 — Análisis manual de URL.
+   * Extendido 2026-08-13 — también acepta texto libre.
    *
    * Cubre el gap arquitectural del scraper: los cron leen sólo la portada de
    * cada portal, así que notas relevantes que caen fuera del top 20 (por
-   * antigüedad o por publicarse entre corridas) no se detectan. Este endpoint
-   * permite a Varone pegar una URL y forzar que la nota pase por el pipeline
-   * completo: fetch + enriquecimiento + prefiltro + IA + dedup + guardado.
+   * antigüedad o por publicarse entre corridas) no se detectan. También cubre
+   * mensajes del grupo de WhatsApp que el bot no procesó (perdidos por el
+   * pre-filtro léxico, un rate-limit de la IA, o cualquier otro gap del
+   * pipeline en vivo). Este endpoint permite a Varone pegar una URL O el
+   * texto de la noticia y forzar que pase por el pipeline completo: fetch
+   * (si hay URL) + enriquecimiento + prefiltro + IA + dedup + guardado.
    *
-   * NO es un scraper genérico — es un forcer 1:1 sobre una URL puntual.
-   * El pipeline `procesarTexto(url, 'manual', { urlNoticia: url })` ya hace
-   * el fetch + parseo + IA + dedup, la única diferencia con inyectar-mensaje
-   * es la fuente (`'manual'`) y que exige que el input sea una URL válida.
+   * Acepta body `{ url }` (comportamiento original, sin cambios) o
+   * `{ texto }` (nuevo: texto libre, con o sin link embebido — el pipeline ya
+   * detecta y enriquece URLs embebidas en `enriquecerSiEsUrl`, así que no
+   * hace falta separar los casos).
+   *
+   * Sigue pasando por la IA — si la IA vuelve a descartarla como no
+   * relevante, no aparece en pendientes. Para ese caso está
+   * `/api/reportar-manual`, que salta la IA directamente.
    */
   app.post('/api/analizar-url', inyeccionLimiter, async (req, res) => {
     try {
-      const url = String(req.body?.url || '').trim();
+      const urlRaw = String(req.body?.url || '').trim();
+      const textoRaw = String(req.body?.texto || '').trim();
 
-      // Validación básica de URL antes de mandar al pipeline (evita spam).
-      let parsed: URL;
-      try {
-        parsed = new URL(url);
-      } catch {
-        res.status(400).json({ ok: false, error: 'URL inválida' });
-        return;
-      }
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        res.status(400).json({ ok: false, error: 'URL debe ser http o https' });
+      if (!urlRaw && !textoRaw) {
+        res.status(400).json({ ok: false, error: 'Se requiere "url" o "texto"' });
         return;
       }
 
-      // Chequeo temprano de duplicado por URL. Si ya existe reporte con esa
-      // URL, respondemos claramente para que la UI pueda mostrarlo (evita que
-      // Varone piense que "no pasó nada" cuando en realidad ya está cargado).
-      const existente = await prisma.reporte.findFirst({
-        where: { urlNoticia: url },
-        select: { id: true, estado: true, creadoEn: true, urlNoticia: true },
-      });
-      if (existente) {
+      // Modo URL: mismo comportamiento que antes, con validación estricta.
+      if (urlRaw) {
+        let parsed: URL;
+        try {
+          parsed = new URL(urlRaw);
+        } catch {
+          res.status(400).json({ ok: false, error: 'URL inválida' });
+          return;
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          res.status(400).json({ ok: false, error: 'URL debe ser http o https' });
+          return;
+        }
+
+        // Chequeo temprano de duplicado por URL. Si ya existe reporte con esa
+        // URL, respondemos claramente para que la UI pueda mostrarlo (evita que
+        // Varone piense que "no pasó nada" cuando en realidad ya está cargado).
+        const existente = await prisma.reporte.findFirst({
+          where: { urlNoticia: urlRaw },
+          select: { id: true, estado: true, creadoEn: true, urlNoticia: true },
+        });
+        if (existente) {
+          res.json({
+            ok: true,
+            encolado: false,
+            duplicado: true,
+            reporte: {
+              id: existente.id,
+              estado: existente.estado,
+              urlNoticia: existente.urlNoticia,
+              creadoEn: existente.creadoEn,
+            },
+            mensaje: `Esa URL ya fue procesada (reporte #${existente.id}, estado: ${existente.estado})`,
+          });
+          return;
+        }
+
+        const { procesarTexto } = await import('../services/pipeline');
+        // procesarTexto es fire-and-forget (encola en cola FIFO del pipeline).
+        // El enriquecimiento por URL + IA + dedup + guardado ocurre async.
+        // Fuente 'scraping' porque el pipeline hace fetch de URL igual que en el
+        // flujo de scraper de portales — reusamos toda esa lógica de parseo/dedup.
+        procesarTexto(urlRaw, 'scraping', {
+          urlNoticia: urlRaw,
+          portalOrigen: `manual-${parsed.hostname}`,
+        });
+
+        logger.info(`[Dashboard] URL analizada manualmente: ${urlRaw}`);
         res.json({
           ok: true,
-          encolado: false,
-          duplicado: true,
-          reporte: {
-            id: existente.id,
-            estado: existente.estado,
-            urlNoticia: existente.urlNoticia,
-            creadoEn: existente.creadoEn,
-          },
-          mensaje: `Esa URL ya fue procesada (reporte #${existente.id}, estado: ${existente.estado})`,
+          encolado: true,
+          duplicado: false,
+          mensaje: 'URL encolada. Si la nota es relevante aparecerá en pendientes en 10-30s.',
         });
         return;
       }
 
-      const { procesarTexto } = await import('../services/pipeline');
-      // procesarTexto es fire-and-forget (encola en cola FIFO del pipeline).
-      // El enriquecimiento por URL + IA + dedup + guardado ocurre async.
-      // Fuente 'scraping' porque el pipeline hace fetch de URL igual que en el
-      // flujo de scraper de portales — reusamos toda esa lógica de parseo/dedup.
-      procesarTexto(url, 'scraping', {
-        urlNoticia: url,
-        portalOrigen: `manual-${parsed.hostname}`,
-      });
+      // Modo texto libre: mismo pipeline, sin exigir formato de URL. El
+      // dedup por hash de texto (existeDuplicado) corre igual dentro del
+      // pipeline — no hace falta chequeo temprano acá porque no hay una
+      // key de "URL" barata para pre-chequear antes de encolar.
+      if (textoRaw.length < 15) {
+        res.status(400).json({ ok: false, error: 'El texto debe tener al menos 15 caracteres' });
+        return;
+      }
 
-      logger.info(`[Dashboard] URL analizada manualmente: ${url}`);
+      const { procesarTexto } = await import('../services/pipeline');
+      procesarTexto(textoRaw, 'whatsapp');
+
+      logger.info(`[Dashboard] Texto analizado manualmente (${textoRaw.length} chars).`);
       res.json({
         ok: true,
         encolado: true,
         duplicado: false,
-        mensaje: 'URL encolada. Si la nota es relevante aparecerá en pendientes en 10-30s.',
+        mensaje: 'Texto encolado. Si la noticia es relevante aparecerá en pendientes en 10-30s.',
       });
     } catch (error) {
       logger.error('[Dashboard] Error en /api/analizar-url:', error);
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /**
+   * Sprint 2026-08-13 — Carga manual forzada, sin pasar por la IA.
+   *
+   * Motivación: si una noticia real llega al grupo de WhatsApp y el bot no la
+   * carga (rate-limit de la IA, pre-filtro léxico, o la IA decide que "no es
+   * relevante" equivocadamente), reintentar vía /api/analizar-url puede volver
+   * a descartarla por el mismo motivo. Este endpoint crea el reporte
+   * directamente en estado 'pendiente', sin invocar a la IA — Varone completa
+   * a mano los campos del formulario Framer que hagan falta desde /aprobacion
+   * (mismo mecanismo que ya existe para reportes con `camposFaltantes`).
+   *
+   * A diferencia de /api/analizar-url, esto SIEMPRE crea un reporte (no hay
+   * "descarte silencioso" posible) — el único bloqueo es duplicado exacto
+   * por hash de texto.
+   */
+  app.post('/api/reportar-manual', inyeccionLimiter, async (req, res) => {
+    try {
+      const texto = String(req.body?.texto || '').trim();
+      const urlNoticia = String(req.body?.url || '').trim() || undefined;
+
+      if (texto.length < 15) {
+        res.status(400).json({ ok: false, error: 'El texto debe tener al menos 15 caracteres' });
+        return;
+      }
+
+      const { existeDuplicado, registrarReporte } = await import('../services/dedup');
+      const esDuplicado = await existeDuplicado(texto, urlNoticia);
+      if (esDuplicado) {
+        res.json({
+          ok: false,
+          error: 'Ya existe un reporte con ese texto o esa URL. Buscalo en /aprobacion antes de cargarlo de nuevo.',
+        });
+        return;
+      }
+
+      const reporteId = await registrarReporte(texto, {
+        fuente: 'manual',
+        textoOriginal: texto,
+        urlNoticia: urlNoticia || null,
+        descripcion: texto.slice(0, 500),
+      });
+
+      logger.info(`[Dashboard] Reporte manual forzado #${reporteId} (sin pasar por IA).`);
+      res.json({
+        ok: true,
+        reporteId,
+        mensaje: `Reporte #${reporteId} creado en pendientes. Completá los campos faltantes en /aprobacion.`,
+      });
+    } catch (error) {
+      logger.error('[Dashboard] Error en /api/reportar-manual:', error);
       res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   });

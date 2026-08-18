@@ -27,6 +27,10 @@ import {
 import { obtenerDashboardCounters, obtenerScrapersStatus, obtenerConfigAdmin } from '@/lib/backend';
 import { ScrapearAhoraButton } from './scrapear-ahora-button';
 import { ReporteHoyCounter } from './reporte-hoy-counter';
+// Sprint 2026-08-13: carga manual de noticias (URL, texto o forzada sin IA).
+// Reusa el mismo diálogo de /aprobacion — Varone pidió tenerlo también acá
+// porque es la primera pantalla que ve al entrar, sin tener que navegar.
+import { AnalizarUrlDialog } from '../aprobacion/analizar-url-dialog';
 // import { WhatsAppWidget } from './whatsapp-widget'; // eliminado — ver WaStatusPanel en /aprobacion
 
 export const dynamic = 'force-dynamic';
@@ -72,7 +76,10 @@ export default async function DashboardPage() {
             Tu sistema escaneando WhatsApp + 6 portales policiales argentinos. Vista panorámica de la operación.
           </p>
         </div>
-        <ScrapearAhoraButton portalesActivosCount={portalesActivosCount} />
+        <div className="flex items-center gap-2">
+          <AnalizarUrlDialog />
+          <ScrapearAhoraButton portalesActivosCount={portalesActivosCount} />
+        </div>
       </header>
 
       {/* Sprint mejoras-flujo (2026-06-30): WhatsAppWidget removido del dashboard

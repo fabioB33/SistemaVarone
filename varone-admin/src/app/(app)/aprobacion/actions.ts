@@ -4,12 +4,15 @@ import { revalidatePath } from 'next/cache';
 import { getSession } from '@/lib/auth';
 import {
   analizarUrlBackend,
+  analizarTextoBackend,
+  reportarManualBackend,
   aprobarReporte,
   descartarReporte,
   despublicarReporte,
   editarReporteBackend,
   reintentarUnReporte,
   type AnalizarUrlResult,
+  type ReportarManualResult,
   type ReporteEditableFields,
 } from '@/lib/backend';
 
@@ -105,6 +108,52 @@ export async function analizarUrlAction(url: string): Promise<AnalizarUrlResult>
   if (!trimmed) return { ok: false, error: 'URL requerida' };
 
   const r = await analizarUrlBackend(trimmed);
+  if (r.ok) revalidatePath('/aprobacion');
+  return r;
+}
+
+/**
+ * Sprint 2026-08-13 — Análisis manual de texto libre.
+ *
+ * Contraparte de analizarUrlAction para mensajes del grupo de WhatsApp que
+ * no traen un link (el usuario escribió el relato a mano). Mismo pipeline
+ * (fetch si detecta URL embebida + prefiltro + IA + dedup), solo cambia el
+ * shape del input.
+ */
+export async function analizarTextoAction(texto: string): Promise<AnalizarUrlResult> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: 'No autenticado' };
+
+  const trimmed = texto.trim();
+  if (trimmed.length < 15) return { ok: false, error: 'El texto debe tener al menos 15 caracteres' };
+
+  const r = await analizarTextoBackend(trimmed);
+  if (r.ok) revalidatePath('/aprobacion');
+  return r;
+}
+
+/**
+ * Sprint 2026-08-13 — Carga manual forzada, sin pasar por la IA.
+ *
+ * Motivación: Varone reportó que 2 noticias del grupo de WhatsApp no fueron
+ * procesadas por el bot y nadie se enteró hasta que las vio pasar en el
+ * grupo. Si reintentar vía analizarTextoAction/analizarUrlAction vuelve a
+ * descartar la noticia (mismo motivo que la primera vez — rate-limit, IA
+ * decide "no relevante", etc.), esta acción crea el reporte directo en
+ * 'pendiente' sin invocar a la IA. Varone completa a mano los dropdowns
+ * faltantes desde la card de /aprobacion (mismo mecanismo ya existente).
+ */
+export async function reportarManualAction(
+  texto: string,
+  url?: string,
+): Promise<ReportarManualResult> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: 'No autenticado' };
+
+  const trimmed = texto.trim();
+  if (trimmed.length < 15) return { ok: false, error: 'El texto debe tener al menos 15 caracteres' };
+
+  const r = await reportarManualBackend(trimmed, url?.trim() || undefined);
   if (r.ok) revalidatePath('/aprobacion');
   return r;
 }

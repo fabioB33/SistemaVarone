@@ -624,9 +624,12 @@ export async function eliminarPortalCustom(
 }
 
 // ─── Sprint 2026-07-07: análisis manual de URL ──────────────────────────────
-// Cierra el gap del scraper (sólo lee portadas, se pierde notas viejas o
-// publicadas entre corridas). El input es una URL y el backend hace fetch +
-// prefiltro + IA + dedup igual que en el flujo de portales.
+// Extendido 2026-08-13: también acepta texto libre (mensajes del grupo de
+// WhatsApp que el bot no procesó). Cierra el gap del scraper (sólo lee
+// portadas, se pierde notas viejas o publicadas entre corridas) y el gap del
+// bot en vivo (mensajes descartados por el pre-filtro, un rate-limit de la
+// IA, etc.). El backend hace fetch (si hay URL) + prefiltro + IA + dedup
+// igual que en el flujo de portales.
 
 export interface AnalizarUrlResult {
   ok: boolean;
@@ -646,5 +649,34 @@ export async function analizarUrlBackend(url: string): Promise<AnalizarUrlResult
   return backendFetch<AnalizarUrlResult>('/api/analizar-url', {
     method: 'POST',
     body: JSON.stringify({ url }),
+  });
+}
+
+export async function analizarTextoBackend(texto: string): Promise<AnalizarUrlResult> {
+  return backendFetch<AnalizarUrlResult>('/api/analizar-url', {
+    method: 'POST',
+    body: JSON.stringify({ texto }),
+  });
+}
+
+// ─── Sprint 2026-08-13: carga manual forzada, sin pasar por la IA ──────────
+// Para cuando la IA ya descartó una noticia real (o el usuario prefiere no
+// esperar el análisis). Crea el reporte directo en 'pendiente' — Varone
+// completa a mano los campos del form Framer que falten desde /aprobacion.
+
+export interface ReportarManualResult {
+  ok: boolean;
+  reporteId?: number;
+  mensaje?: string;
+  error?: string;
+}
+
+export async function reportarManualBackend(
+  texto: string,
+  url?: string,
+): Promise<ReportarManualResult> {
+  return backendFetch<ReportarManualResult>('/api/reportar-manual', {
+    method: 'POST',
+    body: JSON.stringify({ texto, url }),
   });
 }
