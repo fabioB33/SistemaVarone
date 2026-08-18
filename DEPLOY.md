@@ -6,9 +6,9 @@ Sprint deploy-vps (2026-06-30) — Guía paso a paso para deployar el sistema co
 
 Los fixes de ventana de recuperación de historial (`ace26c42`/`fe5a1630`), zombie auto-heal (`8959a8a4`/`69adf9cf`), `init:true` + limpieza de SingletonLock (`373ab50d`) y normalización de nombre de grupo (`887bfe7c`) están **deployados y verificados en el VPS** — confirmado contra el `dist/` corriendo, no solo el fuente (`Init=true`, `zombie-detectado` × 2 en `healthcheck.js`, `HISTORIAL_MAX_MS|ventana:` × 3 en `whatsapp.js`).
 
-## ⚠️ PENDIENTE DE DEPLOY (2026-08-13) — no borrar hasta verificar en el VPS
+## ⚠️ PENDIENTE DE DEPLOY (2026-08-18) — no borrar hasta verificar en el VPS
 
-4 cambios commiteados y pusheados a `main` (monorepo `92a89d5f` + `5217c558` + `34887e2a`, mismos cambios en el repo standalone `fabioB33/SistemaVarone` commits `e868fa6d` + `cced8381` + `29a90197`) que **todavía no están en producción**. El bot del VPS sigue corriendo la versión sin estos cambios hasta que se haga el deploy de la sección ["Actualizar el sistema"](#actualizar-el-sistema) más abajo.
+5 cambios commiteados y pusheados a `main` (monorepo `92a89d5f` + `5217c558` + `34887e2a` + `de3fe56f`, mismos cambios en el repo standalone `fabioB33/SistemaVarone` commits `e868fa6d` + `cced8381` + `29a90197` + `1c873662`) que **todavía no están en producción**. El bot del VPS sigue corriendo la versión sin estos cambios hasta que se haga el deploy de la sección ["Actualizar el sistema"](#actualizar-el-sistema) más abajo.
 
 ### Fix 1 — vinculación de QR
 
@@ -87,6 +87,35 @@ curl -s -X POST http://localhost:3000/api/admin/config/notificaciones \
 - [ ] Con el switch en OFF, `notificar()` no manda nada por WhatsApp (verificar en logs: `"notificaciones desactivadas desde /configuracion"`) pero el sistema sigue funcionando normal (reportes se siguen registrando, panel sigue mostrando todo).
 - [ ] Con el switch en ON de nuevo, las notificaciones vuelven inmediatamente sin reiniciar nada.
 - [ ] Los links de Aprobar/Descartar ya enviados por WhatsApp antes de apagar el switch siguen funcionando (no dependen de `notificar()`).
+
+### Feature 5 — carga manual de noticias en el panel (URL, texto libre, o forzada sin IA)
+
+**Pedido explícito del cliente:** Varone reportó 2 noticias reales de piratería (agosto 2026, `diarioelnorte.com.ar` y `primerplanoonline.com.ar` — ninguno de los 6 portales que scrapea el sistema) que aparecieron en el grupo de WhatsApp y el bot no las procesó. No había forma de cargarlas a mano desde el panel.
+
+- `/api/analizar-url` extendido: acepta `{url}` (comportamiento original) o `{texto}` (nuevo — mensajes sin link, pegados a mano). Pasa por el pipeline con IA igual que siempre.
+- `/api/reportar-manual` (nuevo): crea el reporte directo en `pendiente` **sin pasar por la IA**. Para cuando la IA ya descartó la noticia una vez — reintentar por el mismo pipeline puede volver a descartarla por el mismo motivo. Los campos del form Framer que falten quedan marcados para completar a mano desde `/aprobacion` (mismo mecanismo ya existente para reportes con `camposFaltantes`).
+- Diálogo "Agregar noticia" extendido con tabs URL/Texto + checkbox "Forzar carga (saltear IA)", agregado también al `/dashboard` (antes solo vivía en `/aprobacion`).
+
+```bash
+# Confirmar que el endpoint nuevo está en el build corriendo del backend:
+docker compose -f docker/docker-compose.prod.yml -p sistema-varone exec backend \
+  grep -c "reportar-manual" dist/dashboard/server.js
+# Debe verse >= 1
+
+# Smoke test del endpoint de carga forzada (reemplazar $BACKEND_API_TOKEN):
+curl -s -X POST http://localhost:3000/api/reportar-manual \
+  -H "Content-Type: application/json" -H "X-Backend-Token: $BACKEND_API_TOKEN" \
+  -d '{"texto":"Texto de prueba deploy — robo de carga en Ruta 9 km 100, camión Scania secuestrado.","url":""}'
+# Debe devolver {"ok":true,"reporteId":N,"mensaje":"..."} — y ese reporte debe
+# aparecer en /aprobacion?estado=pendiente con los 10 dropdowns Framer en amber.
+```
+
+**Acceptance criteria:**
+- [ ] El botón "Agregar noticia" aparece en `/dashboard` y en `/aprobacion`.
+- [ ] Pegar una URL nueva (tab Link, sin forzar) la encola por el pipeline con IA — si es relevante, aparece en pendientes en 10-30s.
+- [ ] Pegar texto libre (tab Texto, sin forzar) hace lo mismo sin exigir formato de URL.
+- [ ] Con "Forzar carga" activado, el reporte aparece inmediato en `/aprobacion?estado=pendiente` con los dropdowns faltantes en amber, sin esperar a la IA.
+- [ ] Duplicados (mismo texto o misma URL ya cargada) se rechazan con mensaje claro, no crean un segundo reporte.
 
 **Sigue sin resolver** (no arreglable sin acceso directo al VPS para investigar): por qué la sesión de WhatsApp a veces se pierde tras un reinicio forzado, pese a que el volumen `wwebjs_auth` persiste en disco.
 
